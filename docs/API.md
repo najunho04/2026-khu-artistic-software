@@ -1,8 +1,11 @@
 # 예소 API 명세서
 
 > 출처: Notion `예소 개발자용 > API 기본 명세서` (엔드포인트 DB) + `API Req/Res 명세 초안`
-> 총 46개 엔드포인트 · 앱용 `/api/v1/**` 43개, 기기용 `/device-api/v1/**` 3개
-> 최종 수정: 2026-08-30
+> 총 **48개** 엔드포인트 · 앱용 `/api/v1/**` 45개, 기기용 `/device-api/v1/**` 3개
+> — 2026-09-04 Notion 엔드포인트 DB 원본(48행)과 대조해 확인했습니다. 이전 표기 "46개(앱 43)"는 오기였습니다.
+> 커뮤니티 11개는 구현 제외이므로 **실제 구현 대상은 37개**입니다.
+> 최종 수정: 2026-09-04 — 날짜 동기화만 수행. **ROADMAP 의 테스트 환경(T-1 ~ T-5) 확정은 엔드포인트·req/res·에러코드에 영향 없음.**
+> (직전 수정: 2026-08-30)
 
 > [!WARNING]
 > **req/res 스키마는 초안입니다.** 엔드포인트 DB에는 `param` 컬럼(필드 이름 나열)까지만 존재하고, 각 엔드포인트 페이지의 Request/Response 템플릿은 비어 있습니다. 아래 스키마는 ERD 컬럼 타입과 `설명`·`기타` 컬럼에서 역산한 것으로, 팀 검토 후 확정해야 합니다. 추론 비중이 큰 항목은 🔺로 표시했습니다.
@@ -155,7 +158,7 @@
 
 | code | HTTP | message | 발생 지점 |
 |---|---|---|---|
-| `AUTH_INVALID_PROVIDER` | 400 | 지원하지 않는 로그인 방식입니다. | social-login |
+| `AUTH_INVALID_PROVIDER` | 400 | 지원하지 않는 로그인 방식입니다. | social-login. 현재 `GOOGLE` 외 전부 |
 | `AUTH_INVALID_ID_TOKEN` | 401 | 소셜 로그인에 실패했습니다. | social-login |
 | `AUTH_TOKEN_EXPIRED` | 401 | 로그인이 만료되었습니다. 다시 로그인해 주세요. | 전 구간 |
 | `AUTH_REFRESH_TOKEN_INVALID` | 401 | 다시 로그인해 주세요. | refresh |
@@ -198,16 +201,20 @@
 
 ### 3-6. 커뮤니티 · 캐릭터
 
-| code | HTTP | message |
-|---|---|---|
-| `POST_NOT_FOUND` | 404 | 게시글을 찾을 수 없습니다. |
-| `POST_FORBIDDEN` | 403 | 본인이 작성한 글만 수정·삭제할 수 있습니다. |
-| `COMMENT_NOT_FOUND` | 404 | 댓글을 찾을 수 없습니다. |
-| `COMMENT_FORBIDDEN` | 403 | 본인이 작성한 댓글만 수정·삭제할 수 있습니다. |
-| `COMMENT_DEPTH_EXCEEDED` | 400 | 대댓글에는 답글을 달 수 없습니다. |
-| `LIKE_ALREADY_EXISTS` | 409 | 이미 좋아요한 게시글입니다. |
-| `LIKE_NOT_FOUND` | 404 | 좋아요 기록이 없습니다. |
-| `CHARACTER_NOT_FOUND` | 404 | 캐릭터를 찾을 수 없습니다. |
+> **커뮤니티 7개 코드는 `ErrorCode` 열거형에 넣지 않습니다** (2026-09-04 확정). 커뮤니티가 구현 제외라 이 코드들을 던질 API 가 만들어지지 않기 때문입니다. 아래 표에 ❌ 로 표시했으며, 코드 쪽에는 `ErrorCode` 상단 주석으로 제외 사실만 남깁니다. 향후 커뮤니티를 구현하게 되면 이 표를 그대로 옮기면 됩니다.
+>
+> `CHARACTER_NOT_FOUND` 는 **캐릭터용이고 캐릭터는 구현 대상**이므로 제외 대상이 아닙니다.
+
+| code | HTTP | message | 구현 |
+|---|---|---|---|
+| `POST_NOT_FOUND` | 404 | 게시글을 찾을 수 없습니다. | ❌ 제외 |
+| `POST_FORBIDDEN` | 403 | 본인이 작성한 글만 수정·삭제할 수 있습니다. | ❌ 제외 |
+| `COMMENT_NOT_FOUND` | 404 | 댓글을 찾을 수 없습니다. | ❌ 제외 |
+| `COMMENT_FORBIDDEN` | 403 | 본인이 작성한 댓글만 수정·삭제할 수 있습니다. | ❌ 제외 |
+| `COMMENT_DEPTH_EXCEEDED` | 400 | 대댓글에는 답글을 달 수 없습니다. | ❌ 제외 |
+| `LIKE_ALREADY_EXISTS` | 409 | 이미 좋아요한 게시글입니다. | ❌ 제외 |
+| `LIKE_NOT_FOUND` | 404 | 좋아요 기록이 없습니다. | ❌ 제외 |
+| `CHARACTER_NOT_FOUND` | 404 | 캐릭터를 찾을 수 없습니다. | ✅ |
 
 ---
 
@@ -215,13 +222,15 @@
 
 ### POST /auth/social-login — 소셜 로그인
 
-구글·카카오 소셜 로그인. 최초 로그인 시 회원가입 처리 후 JWT 발급.
+**구글** 소셜 로그인. 최초 로그인 시 회원가입 처리 후 JWT 발급.
+
+> ✅ **확정 (2026-09-04) — 소셜 로그인은 구글로 제한합니다.** 카카오는 구현 범위에서 제외됐습니다. `USERS.provider` 컬럼은 그대로 두어 향후 확장 여지를 남기고, 검증기를 갈아끼우는 인터페이스도 유지합니다. 카카오 검증기를 추가하면 그때 이 enum 에 값을 늘리면 됩니다.
 
 **Request**
 
 | key | 타입 | 필수 | 설명 |
 |---|---|---|---|
-| provider | enum | Y | GOOGLE, KAKAO |
+| provider | enum | Y | `GOOGLE` **만 지원**. 그 외 값은 `AUTH_INVALID_PROVIDER` |
 | idToken | string | Y | 소셜 SDK가 발급한 ID 토큰 |
 
 **Response 200**
@@ -283,7 +292,7 @@
     "userId": 1,
     "name": "김보호",
     "email": "parent@example.com",
-    "provider": "KAKAO",
+    "provider": "GOOGLE",
     "createdAt": "2026-09-01T08:30:00Z"
   },
   "error": null
@@ -1226,6 +1235,8 @@
 |---|---|---|---|
 | 1 | 기기 API에 공통 envelope 적용 여부 | 디바이스 API 3종, 기기 펌웨어 | Phase 1 이전 |
 | 2 | access/refresh 토큰 만료 시간, rotation 여부 | 인증 | Phase 1 |
+| 11 | **JWT 서명 알고리즘과 비밀키 관리 방식** (HS256 대칭키 / RS256 비대칭키, 키를 환경변수·시크릿 어디에 둘지) | JWT 검증 필터 구현 자체 | Phase 1 (1-4 이전) |
+| 12 | **요청·응답 로깅에서 가릴 항목** (`idToken`, `accessToken`, `refreshToken`, 기기 `token`·`secret`, `pairingCode`) | 보안 설정의 로깅 필터 | Phase 1 (1-2 마무리 전) |
 | 3 | 자녀당 최대 기기 수 | `DEVICE_LIMIT_EXCEEDED` 임계값 | 회의 |
 | 4 | 회원 탈퇴 시 cascade 정책 | `DELETE /users/me` 구현 자체 | Phase 2 |
 | 5 | 페어링 폴링 주기·타임아웃 | 앱·서버 합의 사항 | Phase 2 |
