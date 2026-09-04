@@ -8,7 +8,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 @TestConfiguration(proxyBeanMethods = false)
-class TestcontainersConfiguration {
+public class TestcontainersConfiguration {
 
 	// ERD.md 와 ROADMAP.md 가 DBMS 를 "PostgreSQL 17" 로 확정했기 때문에 메이저 버전을 태그에 고정한다.
 	// "latest" 를 쓰면 업스트림이 다음 메이저 버전을 latest 로 올리는 순간 아무도 코드를 건드리지

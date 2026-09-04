@@ -158,7 +158,7 @@
 
 | code | HTTP | message | 발생 지점 |
 |---|---|---|---|
-| `AUTH_INVALID_PROVIDER` | 400 | 지원하지 않는 로그인 방식입니다. | social-login |
+| `AUTH_INVALID_PROVIDER` | 400 | 지원하지 않는 로그인 방식입니다. | social-login. 현재 `GOOGLE` 외 전부 |
 | `AUTH_INVALID_ID_TOKEN` | 401 | 소셜 로그인에 실패했습니다. | social-login |
 | `AUTH_TOKEN_EXPIRED` | 401 | 로그인이 만료되었습니다. 다시 로그인해 주세요. | 전 구간 |
 | `AUTH_REFRESH_TOKEN_INVALID` | 401 | 다시 로그인해 주세요. | refresh |
@@ -222,13 +222,15 @@
 
 ### POST /auth/social-login — 소셜 로그인
 
-구글·카카오 소셜 로그인. 최초 로그인 시 회원가입 처리 후 JWT 발급.
+**구글** 소셜 로그인. 최초 로그인 시 회원가입 처리 후 JWT 발급.
+
+> ✅ **확정 (2026-09-04) — 소셜 로그인은 구글로 제한합니다.** 카카오는 구현 범위에서 제외됐습니다. `USERS.provider` 컬럼은 그대로 두어 향후 확장 여지를 남기고, 검증기를 갈아끼우는 인터페이스도 유지합니다. 카카오 검증기를 추가하면 그때 이 enum 에 값을 늘리면 됩니다.
 
 **Request**
 
 | key | 타입 | 필수 | 설명 |
 |---|---|---|---|
-| provider | enum | Y | GOOGLE, KAKAO |
+| provider | enum | Y | `GOOGLE` **만 지원**. 그 외 값은 `AUTH_INVALID_PROVIDER` |
 | idToken | string | Y | 소셜 SDK가 발급한 ID 토큰 |
 
 **Response 200**
@@ -290,7 +292,7 @@
     "userId": 1,
     "name": "김보호",
     "email": "parent@example.com",
-    "provider": "KAKAO",
+    "provider": "GOOGLE",
     "createdAt": "2026-09-01T08:30:00Z"
   },
   "error": null
