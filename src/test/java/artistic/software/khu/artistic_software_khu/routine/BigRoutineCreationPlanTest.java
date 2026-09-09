@@ -5,8 +5,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import artistic.software.khu.artistic_software_khu.common.BusinessException;
 import artistic.software.khu.artistic_software_khu.common.ErrorCode;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -26,6 +30,9 @@ class BigRoutineCreationPlanTest {
 	// "API.md" 15장 #7 의 기간 상한이 아직 미확정이라 설정값으로 주입받는다.
 	// "ROADMAP.md" 3-1 이 "확정 전까지 상한값은 설정값으로 빼고" 라고 지시한 대로다.
 	private static final int MAX_DATE_RANGE_LENGTH = 31;
+
+	// "API.md" 9장에서 확정한 DATES 모드의 날짜 개수 상한.
+	private static final int MAX_DATE_COUNT = 12;
 
 	private static final LocalTime SEVEN_THIRTY = LocalTime.of(7, 30);
 
@@ -78,7 +85,7 @@ class BigRoutineCreationPlanTest {
 	@Test
 	@DisplayName("종료 시각이 시작 시각보다 빠르면 거절한다")
 	void rejectsEndTimeEarlierThanStartTime() {
-		assertThatThrownBy(() -> BigRoutineCreationPlan.of(
+		assertThatThrownBy(() -> BigRoutineCreationPlan.ofRange(
 			"아침 준비", EIGHT_THIRTY, SEVEN_THIRTY,
 			LocalDate.of(2026, 9, 1), null, MAX_DATE_RANGE_LENGTH))
 			.isInstanceOf(BusinessException.class)
@@ -124,7 +131,7 @@ class BigRoutineCreationPlanTest {
 	void rejectsEndTimeEqualToStartTime() {
 		// 길이가 0 인 루틴은 의미가 없다. "API.md" 가 "startTime 보다 뒤여야 함" 이라고
 		// 적었으므로 같은 값은 뒤가 아니다.
-		assertThatThrownBy(() -> BigRoutineCreationPlan.of(
+		assertThatThrownBy(() -> BigRoutineCreationPlan.ofRange(
 			"아침 준비", SEVEN_THIRTY, SEVEN_THIRTY,
 			LocalDate.of(2026, 9, 1), null, MAX_DATE_RANGE_LENGTH))
 			.isInstanceOf(BusinessException.class)
@@ -132,9 +139,208 @@ class BigRoutineCreationPlanTest {
 			.isEqualTo(ErrorCode.ROUTINE_INVALID_TIME_RANGE);
 	}
 
+	// ------------------------------------------------------------------
+	// WEEKLY — 기간 안에서 지정한 요일마다
+	// ------------------------------------------------------------------
+
+	@Test
+	@DisplayName("WEEKLY 는 기간 안의 지정한 요일에만 만든다")
+	void weeklyCreatesOnlyOnGivenDaysOfWeek() {
+		// 2026-09-01 은 화요일이다. 9월 1일부터 9월 7일까지 중
+		// 월요일은 7일, 수요일은 2일, 금요일은 4일이다.
+		BigRoutineCreationPlan plan = weeklyPlan(
+			LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 7),
+			Set.of(DayOfWeek.MONDAY, DayOfWeek.WEDNESDAY, DayOfWeek.FRIDAY));
+
+		assertThat(plan.routineDates()).containsExactly(
+			LocalDate.of(2026, 9, 2),
+			LocalDate.of(2026, 9, 4),
+			LocalDate.of(2026, 9, 7));
+	}
+
+	@Test
+	@DisplayName("WEEKLY 로 만든 날짜도 모두 같은 seriesId 를 공유한다")
+	void weeklyDatesShareOneSeriesId() {
+		BigRoutineCreationPlan plan = weeklyPlan(
+			LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30),
+			Set.of(DayOfWeek.MONDAY));
+
+		assertThat(plan.seriesId()).isNotNull();
+		assertThat(plan.createdCount()).isEqualTo(4);
+	}
+
+	@Test
+	@DisplayName("기간 안에 해당 요일이 하나도 없으면 오류가 아니라 0개다")
+	void weeklyWithNoMatchingDayCreatesNothing() {
+		// 사용자가 "다음 주 월요일부터" 를 기대하고 짧은 기간을 골랐을 뿐이다.
+		// 오류로 막으면 왜 안 되는지 알 수 없다. 0개를 돌려주고 앱이
+		// "만들어진 루틴이 없습니다" 를 보여주는 편이 낫다.
+		BigRoutineCreationPlan plan = weeklyPlan(
+			LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 3),
+			Set.of(DayOfWeek.SUNDAY));
+
+		assertThat(plan.routineDates()).isEmpty();
+		assertThat(plan.createdCount()).isZero();
+	}
+
+	@Test
+	@DisplayName("요일 목록이 비어 있으면 거절한다")
+	void weeklyWithEmptyDaysIsRejected() {
+		// 위의 "0개" 와 다르다. 저것은 고른 요일이 기간에 없는 것이고
+		// 이것은 요일을 아예 고르지 않은 것이라 요청 자체가 성립하지 않는다.
+		assertThatThrownBy(() -> weeklyPlan(
+			LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30), Set.of()))
+			.isInstanceOf(BusinessException.class)
+			.extracting(exception -> ((BusinessException) exception).getErrorCode())
+			.isEqualTo(ErrorCode.ROUTINE_INVALID_REPEAT_RULE);
+	}
+
+	@Test
+	@DisplayName("WEEKLY 도 종료일이 시작일보다 빠르면 거절한다")
+	void weeklyRejectsReversedDateRange() {
+		assertThatThrownBy(() -> weeklyPlan(
+			LocalDate.of(2026, 9, 7), LocalDate.of(2026, 9, 1),
+			Set.of(DayOfWeek.MONDAY)))
+			.isInstanceOf(BusinessException.class)
+			.extracting(exception -> ((BusinessException) exception).getErrorCode())
+			.isEqualTo(ErrorCode.ROUTINE_INVALID_DATE_RANGE);
+	}
+
+	@Test
+	@DisplayName("WEEKLY 는 훑는 기간이 상한을 넘으면 거절한다")
+	void weeklyRejectsScanRangeLongerThanLimit() {
+		// 만들어지는 행이 적더라도 훑어야 하는 날짜는 기간 전체다.
+		// 상한을 기간에 걸지 않으면 "매주 월요일, 10년치" 같은 요청이
+		// 3650일을 훑게 된다.
+		LocalDate start = LocalDate.of(2026, 9, 1);
+
+		assertThatThrownBy(() -> weeklyPlan(
+			start, start.plusDays(MAX_DATE_RANGE_LENGTH), Set.of(DayOfWeek.MONDAY)))
+			.isInstanceOf(BusinessException.class)
+			.extracting(exception -> ((BusinessException) exception).getErrorCode())
+			.isEqualTo(ErrorCode.ROUTINE_DATE_RANGE_TOO_LONG);
+	}
+
+	// ------------------------------------------------------------------
+	// DATES — 지정한 날짜들만
+	// ------------------------------------------------------------------
+
+	@Test
+	@DisplayName("DATES 는 지정한 날짜에만 만든다")
+	void datesCreatesOnlyGivenDates() {
+		BigRoutineCreationPlan plan = datesPlan(List.of(
+			LocalDate.of(2026, 9, 10),
+			LocalDate.of(2026, 9, 12),
+			LocalDate.of(2026, 9, 17)));
+
+		assertThat(plan.routineDates()).containsExactly(
+			LocalDate.of(2026, 9, 10),
+			LocalDate.of(2026, 9, 12),
+			LocalDate.of(2026, 9, 17));
+	}
+
+	@Test
+	@DisplayName("DATES 는 순서가 뒤섞여 와도 날짜순으로 정리한다")
+	void datesAreSortedRegardlessOfInputOrder() {
+		// 앱이 어떤 순서로 보내든 결과가 같아야 한다. 정리하지 않으면
+		// 캘린더에 뒤죽박죽 순서로 들어가고, 같은 요청이 두 번 왔을 때
+		// 결과가 다른지 비교하기도 어려워진다.
+		BigRoutineCreationPlan plan = datesPlan(List.of(
+			LocalDate.of(2026, 9, 17),
+			LocalDate.of(2026, 9, 10),
+			LocalDate.of(2026, 9, 12)));
+
+		assertThat(plan.routineDates()).containsExactly(
+			LocalDate.of(2026, 9, 10),
+			LocalDate.of(2026, 9, 12),
+			LocalDate.of(2026, 9, 17));
+	}
+
+	@Test
+	@DisplayName("DATES 에 같은 날짜가 두 번 오면 하나로 친다")
+	void duplicateDatesAreCollapsed() {
+		// 그대로 두면 같은 날에 똑같은 루틴이 두 개 생긴다. 사용자가
+		// 실수로 같은 날을 두 번 골랐을 뿐인데 지우는 일이 두 번이 된다.
+		BigRoutineCreationPlan plan = datesPlan(List.of(
+			LocalDate.of(2026, 9, 10),
+			LocalDate.of(2026, 9, 10),
+			LocalDate.of(2026, 9, 12)));
+
+		assertThat(plan.createdCount()).isEqualTo(2);
+	}
+
+	@Test
+	@DisplayName("DATES 가 비어 있으면 거절한다")
+	void emptyDatesIsRejected() {
+		assertThatThrownBy(() -> datesPlan(List.of()))
+			.isInstanceOf(BusinessException.class)
+			.extracting(exception -> ((BusinessException) exception).getErrorCode())
+			.isEqualTo(ErrorCode.ROUTINE_INVALID_REPEAT_RULE);
+	}
+
+	@Test
+	@DisplayName("DATES 는 열두 개까지 받고 열세 개는 거절한다")
+	void datesLimitIsTwelve() {
+		LocalDate start = LocalDate.of(2026, 9, 1);
+
+		List<LocalDate> twelveDates = Stream.iterate(start, date -> date.plusDays(1))
+			.limit(MAX_DATE_COUNT)
+			.toList();
+
+		assertThat(datesPlan(twelveDates).createdCount()).isEqualTo(MAX_DATE_COUNT);
+
+		List<LocalDate> thirteenDates = Stream.iterate(start, date -> date.plusDays(1))
+			.limit(MAX_DATE_COUNT + 1)
+			.toList();
+
+		assertThatThrownBy(() -> datesPlan(thirteenDates))
+			.isInstanceOf(BusinessException.class)
+			.extracting(exception -> ((BusinessException) exception).getErrorCode())
+			.isEqualTo(ErrorCode.ROUTINE_TOO_MANY_DATES);
+	}
+
+	@Test
+	@DisplayName("중복을 걷어낸 뒤의 개수로 상한을 본다")
+	void dateLimitIsCheckedAfterRemovingDuplicates() {
+		// 같은 날짜를 열세 번 보내면 실제로 만들어지는 것은 하나뿐이다.
+		// 중복을 걷어내기 전에 세면 만들 것이 하나인 요청을 거절하게 된다.
+		List<LocalDate> repeated = Stream.generate(() -> LocalDate.of(2026, 9, 10))
+			.limit(MAX_DATE_COUNT + 1)
+			.toList();
+
+		assertThat(datesPlan(repeated).createdCount()).isEqualTo(1);
+	}
+
+	@Test
+	@DisplayName("DATES 로 만든 날짜도 모두 같은 seriesId 를 공유한다")
+	void datesShareOneSeriesId() {
+		BigRoutineCreationPlan plan = datesPlan(List.of(
+			LocalDate.of(2026, 9, 10), LocalDate.of(2026, 9, 12)));
+
+		assertThat(plan.seriesId()).isNotNull();
+		assertThat(plan.createdCount()).isEqualTo(2);
+	}
+
+	// ------------------------------------------------------------------
+	// 도우미
+	// ------------------------------------------------------------------
+
 	private static BigRoutineCreationPlan plan(LocalDate startDate, LocalDate endDate) {
-		return BigRoutineCreationPlan.of(
+		return BigRoutineCreationPlan.ofRange(
 			"아침 준비", SEVEN_THIRTY, EIGHT_THIRTY, startDate, endDate, MAX_DATE_RANGE_LENGTH);
+	}
+
+	private static BigRoutineCreationPlan weeklyPlan(
+		LocalDate startDate, LocalDate endDate, Set<DayOfWeek> repeatDays) {
+
+		return BigRoutineCreationPlan.ofWeekly(
+			"아침 준비", SEVEN_THIRTY, EIGHT_THIRTY,
+			startDate, endDate, repeatDays, MAX_DATE_RANGE_LENGTH);
+	}
+
+	private static BigRoutineCreationPlan datesPlan(List<LocalDate> dates) {
+		return BigRoutineCreationPlan.ofDates(
+			"아침 준비", SEVEN_THIRTY, EIGHT_THIRTY, dates, MAX_DATE_COUNT);
 	}
 
 }

@@ -608,9 +608,13 @@ DB 는 Testcontainers 의 실제 PostgreSQL 17 을 씁니다.
 
 | 항목 | 상태 |
 |---|---|
-| `BigRoutineCreationPlan` — `RANGE` · 시각 검증 · 상한 · seriesId 공유 | ✅ 완료 — 테스트 9개 통과 (`--rerun-tasks`, skip 0) |
-| `WEEKLY` · `DATES` 모드 | ⬜ 미착수 (막힌 것 없음) |
-| 엔드포인트 · 저장 · 전파 규칙 | ⬜ 미착수 (막힌 것 없음) |
+| `BigRoutineCreationPlan` — `RANGE` · `WEEKLY` · `DATES` 3종 | ✅ **완료** — 단위 테스트 22개 |
+| 엔드포인트 8개 · 저장 · 전파 규칙 | ✅ **완료** — `RoutineController` · `RoutineService` |
+| 소유권 검사 (`:bigRoutineId` · `:smallRoutineId` 포함) | ✅ **완료** |
+
+**산출물** — `routine/` 에 엔티티 3개(`BigRoutine` · `SmallRoutine` · `RoutineTemplate`), 리포지토리 3개, 서비스 2개, 컨트롤러 2개, DTO 10개. 통합 테스트 `RoutineApiIntegrationTest` **25개**.
+
+> ⚠️ **구현 중 드러난 것** — `jsonb` 컬럼에 `String` 필드를 매핑할 때 `@JdbcTypeCode(SqlTypes.JSON)` 이 반드시 필요합니다. 없으면 하이버네이트가 평범한 `varchar` 로 보내고 PostgreSQL 이 `column is of type jsonb but expression is of type character varying` 로 거절합니다. 자바 쪽 타입이 `String` 이어도 DB 에는 JSON 으로 보내야 한다는 것을 따로 알려주어야 합니다.
 
 > ❓ **질문 필요** — `RANGE` 의 **기간 길이 상한**이 미확정입니다. 확정 전까지 설정값으로 주입합니다. `DATES` 의 12개와는 별개 값입니다.
 
@@ -631,6 +635,8 @@ DB 는 Testcontainers 의 실제 PostgreSQL 17 을 씁니다.
 - 꺼내 쓸 때 값을 **복사**하고 원본을 가리키는 값은 남기지 않습니다. `BIG_ROUTINES.template_id` 를 삭제한 것이 이 규칙을 코드가 아니라 스키마로 강제합니다. 컬럼이 없으면 전파를 구현할 자리 자체가 없습니다.
 - 삭제는 `deleted_at` 을 채우는 soft delete 이며 목록 조회는 `deleted_at is null` 로 거릅니다.
 
+**진행 상황** — ✅ **완료.** `RoutineTemplateService` · `RoutineTemplateController`, 엔드포인트 4개.
+
 ### 3-3. series_id 규칙 검증
 
 `series_id` 는 반복으로 만든 루틴을 하나로 묶는 값이고, **통계의 기준이자 수정 · 삭제 범위의 기준**입니다. **규칙 자체를 테스트로 고정**해 둡니다.
@@ -638,6 +644,8 @@ DB 는 Testcontainers 의 실제 PostgreSQL 17 을 씁니다.
 **RED** — 빅루틴 수정 시 유지 / 스몰루틴 수정 시 유지(이름 변경으로 간주) / 스몰루틴 추가 시 새 값 발급 / 반복 생성한 행 전체가 같은 값 / 따로 만든 두 루틴은 다른 값.
 
 **GREEN** — 수정 경로에서는 `series_id` 를 아예 건드리지 않고, 생성 경로에서만 새 값을 부여합니다.
+
+**진행 상황** — ✅ **완료.** 스몰루틴의 `series_id` 는 무작위로 만들지 않고 **빅루틴 시리즈와 순서를 섞어 만듭니다**(`deriveSmallRoutineSeriesId`). 무작위로 만들면 9월 1일의 "양치하기" 와 9월 2일의 "양치하기" 가 서로 다른 미션이 되어, 미션별 이행률을 날짜에 걸쳐 모을 수 없습니다. 같은 입력이면 항상 같은 값이 나오므로 저장해 두고 찾아 쓸 필요도 없습니다.
 
 ---
 
