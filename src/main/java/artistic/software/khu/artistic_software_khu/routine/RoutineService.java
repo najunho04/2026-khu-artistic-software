@@ -7,6 +7,7 @@ import artistic.software.khu.artistic_software_khu.common.ErrorCode;
 import java.time.Clock;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -49,7 +50,7 @@ public class RoutineService {
 
 	private final SmallRoutineRepository smallRoutineRepository;
 
-	private final RoutineTemplateRepository routineTemplateRepository;
+	private final RoutineTemplateService routineTemplateService;
 
 	private final ChildService childService;
 
@@ -62,14 +63,14 @@ public class RoutineService {
 	public RoutineService(
 		BigRoutineRepository bigRoutineRepository,
 		SmallRoutineRepository smallRoutineRepository,
-		RoutineTemplateRepository routineTemplateRepository,
+		RoutineTemplateService routineTemplateService,
 		ChildService childService,
 		Clock clock,
 		@Value("${yeso.routine.max-date-range-length:31}") int maximumDateRangeLength) {
 
 		this.bigRoutineRepository = bigRoutineRepository;
 		this.smallRoutineRepository = smallRoutineRepository;
-		this.routineTemplateRepository = routineTemplateRepository;
+		this.routineTemplateService = routineTemplateService;
 		this.childService = childService;
 		this.clock = clock;
 		this.maximumDateRangeLength = maximumDateRangeLength;
@@ -85,8 +86,13 @@ public class RoutineService {
 
 		childService.findOwnedChild(userId, childId);
 
-		BigRoutineCreationPlan plan = buildPlan(userId, childId, request);
-		List<SmallRoutineRequest> smallRoutineRequests = resolveSmallRoutines(userId, request);
+		// 양식은 "한 번만" 읽어 아래로 넘긴다. 제목과 시각과 할 일이 각자
+		// 따로 읽으면 같은 행을 세 번 조회하게 되고, 그 사이에 값이 바뀌면
+		// 한 루틴 안에서 서로 다른 양식의 값이 섞일 수 있다.
+		RoutineTemplate template = loadTemplateIfGiven(userId, request);
+
+		BigRoutineCreationPlan plan = buildPlan(request, template);
+		List<SmallRoutineRequest> smallRoutineRequests = resolveSmallRoutines(request, template);
 
 		for (LocalDate routineDate : plan.routineDates()) {
 			BigRoutine bigRoutine =
@@ -106,24 +112,30 @@ public class RoutineService {
 	 * 규칙과 저장을 갈라 두어야 규칙을 DB 없이 검증할 수 있다.
 	 */
 	private BigRoutineCreationPlan buildPlan(
-		Long userId, Long childId, BigRoutineCreateRequest request) {
+		BigRoutineCreateRequest request, RoutineTemplate template) {
 
 		RepeatType repeatType = parseRepeatType(request.repeatType());
 
-		String title = resolveTitle(userId, request);
+		String title = resolveTitle(request, template);
+		LocalTime startTime = resolveStartTime(request, template);
+		LocalTime endTime = resolveEndTime(request, template);
+
+		if (startTime == null || endTime == null) {
+			throw new BusinessException(ErrorCode.INVALID_INPUT);
+		}
 
 		return switch (repeatType) {
 			case RANGE -> BigRoutineCreationPlan.ofRange(
-				title, request.startTime(), request.endTime(),
+				title, startTime, endTime,
 				request.startDate(), request.endDate(), maximumDateRangeLength);
 
 			case WEEKLY -> BigRoutineCreationPlan.ofWeekly(
-				title, request.startTime(), request.endTime(),
+				title, startTime, endTime,
 				request.startDate(), request.endDate(),
 				parseRepeatDays(request.repeatDays()), maximumDateRangeLength);
 
 			case DATES -> BigRoutineCreationPlan.ofDates(
-				title, request.startTime(), request.endTime(),
+				title, startTime, endTime,
 				request.repeatDates(), MAXIMUM_DATE_COUNT);
 		};
 	}
@@ -162,25 +174,68 @@ public class RoutineService {
 	}
 
 	/**
-	 * 양식을 꺼내 쓰는 경우 그 값을 복사한다. 원본을 가리키는 값은 남기지 않는다.
+	 * 양식이 지정됐으면 읽어 온다. 없으면 null 이다.
+	 *
+	 * 여기서 소유권 검사도 함께 일어난다(RoutineTemplateService.findOwnedTemplate).
+	 * 검사가 없으면 templateId 를 1, 2, 3 으로 바꿔가며 남이 저장해둔 양식의
+	 * 내용을 자기 루틴으로 만들어 읽을 수 있다.
 	 */
-	private String resolveTitle(Long userId, BigRoutineCreateRequest request) {
+	private RoutineTemplate loadTemplateIfGiven(Long userId, BigRoutineCreateRequest request) {
+		if (request.templateId() == null) {
+			return null;
+		}
+
+		return routineTemplateService.findOwnedTemplate(userId, request.templateId());
+	}
+
+	/**
+	 * 값을 정하는 규칙은 네 곳 모두 같다. **요청에 값이 있으면 요청이 이기고,
+	 * 없으면 양식 값으로 채운다.**
+	 *
+	 * 요청을 우선하는 이유는 앱의 흐름 때문이다. 앱은 양식을 불러와 화면을
+	 * 채우고, 사용자가 시간이나 제목을 고친 뒤 저장한다. 양식이 이기면
+	 * 사용자가 고친 값이 무시되고, 왜 안 바뀌는지 알 수 없게 된다.
+	 *
+	 * 양식은 "기본값" 이고 요청은 "이번에 실제로 쓸 값" 이다.
+	 */
+	private String resolveTitle(BigRoutineCreateRequest request, RoutineTemplate template) {
 		if (request.title() != null && !request.title().isBlank()) {
 			return request.title();
 		}
 
-		if (request.templateId() != null) {
-			return findOwnedTemplate(userId, request.templateId()).getTitle();
+		if (template != null) {
+			return template.getTitle();
 		}
 
+		// 양식도 없고 제목도 없으면 무엇을 만들지 알 수 없다.
 		throw new BusinessException(ErrorCode.INVALID_INPUT);
 	}
 
+	private LocalTime resolveStartTime(BigRoutineCreateRequest request, RoutineTemplate template) {
+		if (request.startTime() != null) {
+			return request.startTime();
+		}
+
+		return (template == null) ? null : template.getStartTime();
+	}
+
+	private LocalTime resolveEndTime(BigRoutineCreateRequest request, RoutineTemplate template) {
+		if (request.endTime() != null) {
+			return request.endTime();
+		}
+
+		return (template == null) ? null : template.getEndTime();
+	}
+
 	private List<SmallRoutineRequest> resolveSmallRoutines(
-		Long userId, BigRoutineCreateRequest request) {
+		BigRoutineCreateRequest request, RoutineTemplate template) {
 
 		if (request.smallRoutines() != null && !request.smallRoutines().isEmpty()) {
 			return request.smallRoutines();
+		}
+
+		if (template != null) {
+			return routineTemplateService.readSmallRoutines(template);
 		}
 
 		return List.of();
@@ -397,15 +452,6 @@ public class RoutineService {
 		findOwnedBigRoutine(userId, smallRoutine.getBigRoutineId());
 
 		return smallRoutine;
-	}
-
-	RoutineTemplate findOwnedTemplate(Long userId, Long templateId) {
-		RoutineTemplate template = routineTemplateRepository.findByIdAndDeletedAtIsNull(templateId)
-			.orElseThrow(() -> new BusinessException(ErrorCode.ROUTINE_TEMPLATE_NOT_FOUND));
-
-		childService.findOwnedChild(userId, template.getChildId());
-
-		return template;
 	}
 
 	/**

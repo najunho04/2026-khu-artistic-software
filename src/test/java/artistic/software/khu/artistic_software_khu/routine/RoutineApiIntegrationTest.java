@@ -64,6 +64,9 @@ class RoutineApiIntegrationTest {
 
 	private long childId;
 
+	// 소유권 검사를 찔러 볼 때 쓰는, 다른 보호자의 자녀
+	private long strangerChildId;
+
 	@Autowired
 	private MockMvc mockMvc;
 
@@ -75,6 +78,7 @@ class RoutineApiIntegrationTest {
 		ownerUuid = signUp("routine-owner@example.com");
 		strangerUuid = signUp("routine-stranger@example.com");
 		childId = registerChild(ownerUuid);
+		strangerChildId = registerChild(strangerUuid);
 	}
 
 	// ------------------------------------------------------------------
@@ -453,14 +457,111 @@ class RoutineApiIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("양식을 꺼내 만들면 제목·시각·할 일이 모두 복사된다")
+	void creatingFromTemplateCopiesEveryField() throws Exception {
+		long templateId = saveTemplate("저녁 루틴");
+
+		// 양식만 지정하고 나머지는 아무것도 보내지 않는다. 양식을 꺼내 쓰는
+		// 목적이 "저장해둔 값을 그대로 쓰는 것" 이므로 이것이 기본 사용법이다.
+		mockMvc.perform(createRoutine("""
+			{
+			  "repeatType": "RANGE",
+			  "startDate": "%s",
+			  "endDate": "%s",
+			  "templateId": %d
+			}""".formatted(FUTURE_MONDAY, FUTURE_MONDAY, templateId)))
+			.andExpect(status().isCreated());
+
+		mockMvc.perform(calendarRequest(FUTURE_MONDAY, FUTURE_MONDAY))
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].title").value("저녁 루틴"))
+			// 시각을 안 가져오면 루틴이 몇 시에 하는 것인지 알 수 없게 된다.
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].startTime").value("19:00"))
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].endTime").value("20:00"))
+			// 할 일이 안 딸려오면 빈 루틴이 만들어진다. 양식을 저장해 둔
+			// 이유가 거의 사라지는 셈이다.
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].smallRoutines.length()").value(2))
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].smallRoutines[0].title").value("숙제하기"))
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].smallRoutines[1].title").value("책 읽기"));
+	}
+
+	@Test
+	@DisplayName("양식과 요청에 값이 둘 다 있으면 요청이 이긴다")
+	void requestValuesWinOverTemplateValues() throws Exception {
+		long templateId = saveTemplate("저녁 루틴");
+
+		// 앱이 양식을 불러와 화면을 채우고, 사용자가 값을 고친 뒤 저장하는
+		// 흐름이다. 고친 값이 무시되면 사용자는 왜 안 바뀌는지 알 수 없다.
+		mockMvc.perform(createRoutine("""
+			{
+			  "title": "밤 루틴",
+			  "startTime": "20:00",
+			  "endTime": "21:00",
+			  "repeatType": "RANGE",
+			  "startDate": "%s",
+			  "endDate": "%s",
+			  "smallRoutines": [{"title": "일기 쓰기"}],
+			  "templateId": %d
+			}""".formatted(FUTURE_MONDAY, FUTURE_MONDAY, templateId)))
+			.andExpect(status().isCreated());
+
+		mockMvc.perform(calendarRequest(FUTURE_MONDAY, FUTURE_MONDAY))
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].title").value("밤 루틴"))
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].startTime").value("20:00"))
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].smallRoutines.length()").value(1))
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].smallRoutines[0].title").value("일기 쓰기"));
+	}
+
+	@Test
+	@DisplayName("일부만 보내면 나머지는 양식 값으로 채운다")
+	void missingFieldsAreFilledFromTemplate() throws Exception {
+		long templateId = saveTemplate("저녁 루틴");
+
+		// 제목만 바꾸고 시각과 할 일은 양식 그대로 쓰는 경우다.
+		mockMvc.perform(createRoutine("""
+			{
+			  "title": "밤 루틴",
+			  "repeatType": "RANGE",
+			  "startDate": "%s",
+			  "endDate": "%s",
+			  "templateId": %d
+			}""".formatted(FUTURE_MONDAY, FUTURE_MONDAY, templateId)))
+			.andExpect(status().isCreated());
+
+		mockMvc.perform(calendarRequest(FUTURE_MONDAY, FUTURE_MONDAY))
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].title").value("밤 루틴"))
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].startTime").value("19:00"))
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].smallRoutines.length()").value(2));
+	}
+
+	@Test
+	@DisplayName("남의 양식으로는 루틴을 만들 수 없다")
+	void strangerTemplateCannotBeUsed() throws Exception {
+		long templateId = saveTemplate("저녁 루틴");
+
+		// 양식을 꺼내는 것도 소유권 검사를 거쳐야 한다. 검사가 없으면
+		// templateId 를 1, 2, 3 으로 바꿔가며 남이 저장해둔 양식의 내용을
+		// 자기 루틴으로 만들어 읽을 수 있다.
+		mockMvc.perform(post("/api/v1/children/" + strangerChildId + "/big-routines")
+				.header(APP_HEADER, strangerUuid)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{
+					  "repeatType": "RANGE",
+					  "startDate": "%s",
+					  "endDate": "%s",
+					  "templateId": %d
+					}""".formatted(FUTURE_MONDAY, FUTURE_MONDAY, templateId)))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.error.code").value("CHILD_FORBIDDEN"));
+	}
+
+	@Test
 	@DisplayName("양식을 수정해도 이미 만든 빅루틴은 그대로다")
 	void updatingTemplateDoesNotAffectExistingRoutines() throws Exception {
 		long templateId = saveTemplate("저녁 루틴");
 
 		mockMvc.perform(createRoutine("""
 			{
-			  "startTime": "19:00",
-			  "endTime": "20:00",
 			  "repeatType": "RANGE",
 			  "startDate": "%s",
 			  "endDate": "%s",
@@ -477,8 +578,13 @@ class RoutineApiIntegrationTest {
 
 		// 꺼내 쓰는 순간 값이 복사되고 둘의 관계는 거기서 끝난다.
 		// 워드의 서식 파일을 고쳐도 이미 만든 문서는 그대로인 것과 같다.
+		//
+		// 제목만 확인하지 않고 시각과 할 일까지 본다. 제목만 보면 "복사는
+		// 제목만 되고 나머지는 아예 안 되는" 상태에서도 초록불이 뜬다.
 		mockMvc.perform(calendarRequest(FUTURE_MONDAY, FUTURE_MONDAY))
-			.andExpect(jsonPath("$.data[0].bigRoutines[0].title").value("저녁 루틴"));
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].title").value("저녁 루틴"))
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].startTime").value("19:00"))
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].smallRoutines.length()").value(2));
 	}
 
 	@Test
@@ -488,8 +594,6 @@ class RoutineApiIntegrationTest {
 
 		mockMvc.perform(createRoutine("""
 			{
-			  "startTime": "19:00",
-			  "endTime": "20:00",
 			  "repeatType": "RANGE",
 			  "startDate": "%s",
 			  "endDate": "%s",
@@ -502,7 +606,8 @@ class RoutineApiIntegrationTest {
 			.andExpect(status().isNoContent());
 
 		mockMvc.perform(calendarRequest(FUTURE_MONDAY, FUTURE_MONDAY))
-			.andExpect(jsonPath("$.data[0].bigRoutines[0].title").value("저녁 루틴"));
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].title").value("저녁 루틴"))
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].smallRoutines.length()").value(2));
 
 		mockMvc.perform(get("/api/v1/children/" + childId + "/routine-templates")
 				.header(APP_HEADER, ownerUuid))

@@ -79,7 +79,15 @@ public class RoutineTemplateService {
 		findOwnedTemplate(userId, templateId).delete(clock.instant());
 	}
 
-	private RoutineTemplate findOwnedTemplate(Long userId, Long templateId) {
+	/**
+	 * 내 양식 하나를 찾는다. 빅루틴을 만들 때 RoutineService 도 이것을 쓴다.
+	 *
+	 * 조회와 소유권 검사를 한 곳에 두어야 어느 경로로 들어오든 같게 동작한다.
+	 * 양식을 꺼내는 것도 검사를 거쳐야 한다. 검사가 없으면 templateId 를
+	 * 1, 2, 3 으로 바꿔가며 남이 저장해둔 양식의 내용을 자기 루틴으로 만들어
+	 * 읽을 수 있다.
+	 */
+	RoutineTemplate findOwnedTemplate(Long userId, Long templateId) {
 		RoutineTemplate template = routineTemplateRepository.findByIdAndDeletedAtIsNull(templateId)
 			.orElseThrow(() -> new artistic.software.khu.artistic_software_khu.common
 				.BusinessException(
@@ -90,6 +98,21 @@ public class RoutineTemplateService {
 		childService.findOwnedChild(userId, template.getChildId());
 
 		return template;
+	}
+
+	/**
+	 * 양식에 저장된 할 일 목록을 읽는다. 빅루틴을 만들 때 이 값을 복사한다.
+	 *
+	 * 읽는 방법을 여기 한 곳에만 두는 이유는, 같은 jsonb 문자열을 두 곳에서
+	 * 각자 해석하면 한쪽이 형식을 바꿨을 때 다른 쪽이 조용히 깨지기 때문이다.
+	 */
+	List<SmallRoutineRequest> readSmallRoutines(RoutineTemplate template) {
+		if (template.getSmallRoutines() == null) {
+			return List.of();
+		}
+
+		return objectMapper.readValue(
+			template.getSmallRoutines(), new TypeReference<List<SmallRoutineRequest>>() {});
 	}
 
 	/**
@@ -104,14 +127,9 @@ public class RoutineTemplateService {
 	}
 
 	private RoutineTemplateResponse toResponse(RoutineTemplate template) {
-		List<SmallRoutineRequest> smallRoutines = (template.getSmallRoutines() == null)
-			? List.of()
-			: objectMapper.readValue(
-				template.getSmallRoutines(), new TypeReference<List<SmallRoutineRequest>>() {});
-
 		return new RoutineTemplateResponse(
 			template.getId(), template.getTitle(),
-			template.getStartTime(), template.getEndTime(), smallRoutines);
+			template.getStartTime(), template.getEndTime(), readSmallRoutines(template));
 	}
 
 }
