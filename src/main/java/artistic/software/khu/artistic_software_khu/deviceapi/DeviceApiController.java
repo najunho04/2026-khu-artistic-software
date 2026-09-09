@@ -1,10 +1,12 @@
 package artistic.software.khu.artistic_software_khu.deviceapi;
 
+import artistic.software.khu.artistic_software_khu.auth.AuthenticatedDevice;
 import artistic.software.khu.artistic_software_khu.common.ApiResponse;
 import artistic.software.khu.artistic_software_khu.device.ClaimRequest;
 import artistic.software.khu.artistic_software_khu.device.ClaimResponse;
 import artistic.software.khu.artistic_software_khu.device.DeviceService;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -26,13 +28,34 @@ public class DeviceApiController {
 
 	private final DeviceService deviceService;
 
-	public DeviceApiController(DeviceService deviceService) {
+	private final DeviceSyncService deviceSyncService;
+
+	public DeviceApiController(
+		DeviceService deviceService, DeviceSyncService deviceSyncService) {
+
 		this.deviceService = deviceService;
+		this.deviceSyncService = deviceSyncService;
 	}
 
 	@PostMapping("/claim")
 	public ResponseEntity<ApiResponse<ClaimResponse>> claim(@RequestBody ClaimRequest request) {
 		return ResponseEntity.ok(ApiResponse.success(deviceService.claim(request)));
+	}
+
+	/**
+	 * 기기 동기화. claim 과 달리 인증이 필요하다.
+	 *
+	 * 인증된 기기 정보는 필터가 SecurityContext 에 넣어 둔 것을 받는다.
+	 * 요청 본문에서 기기 id 를 받지 않는 이유는, 그러면 기기가 남의 id 를
+	 * 지어내 다른 아이의 루틴을 받아 갈 수 있기 때문이다.
+	 */
+	@PostMapping("/sync")
+	public ResponseEntity<ApiResponse<SyncResponse>> sync(
+		@AuthenticationPrincipal AuthenticatedDevice authenticatedDevice,
+		@RequestBody SyncRequest request) {
+
+		return ResponseEntity.ok(ApiResponse.success(
+			deviceSyncService.sync(authenticatedDevice.deviceId(), request)));
 	}
 
 }

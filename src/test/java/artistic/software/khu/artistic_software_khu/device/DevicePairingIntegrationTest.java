@@ -236,9 +236,12 @@ class DevicePairingIntegrationTest {
 			objectMapper.readTree(body).path("data").path("deviceAccessUuid").asText();
 
 		// 온보딩의 마지막 조각이다. 여기까지 이어져야 기기가 루틴을 받아 갈 수 있다.
-		// sync 는 아직 없으므로 통과하면 404 가 난다. 401 이 아니라는 것이 확인점이다.
-		mockMvc.perform(post("/device-api/v1/sync").header(DEVICE_HEADER, deviceAccessUuid))
-			.andExpect(status().isNotFound());
+		mockMvc.perform(post("/device-api/v1/sync")
+				.header(DEVICE_HEADER, deviceAccessUuid)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{"battery": 50, "firmware": "1.0.0", "completions": [], "dates": []}"""))
+			.andExpect(status().isOk());
 	}
 
 	// ------------------------------------------------------------------
@@ -320,7 +323,11 @@ class DevicePairingIntegrationTest {
 
 		// 해제한 기기가 계속 인증에 성공하면 그 기기는 주인이 끊었는데도
 		// 자녀의 루틴을 계속 받아 간다.
-		mockMvc.perform(post("/device-api/v1/sync").header(DEVICE_HEADER, deviceAccessUuid))
+		mockMvc.perform(post("/device-api/v1/sync")
+				.header(DEVICE_HEADER, deviceAccessUuid)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{"battery": 50, "firmware": "1.0.0", "completions": [], "dates": []}"""))
 			.andExpect(status().isUnauthorized());
 	}
 
