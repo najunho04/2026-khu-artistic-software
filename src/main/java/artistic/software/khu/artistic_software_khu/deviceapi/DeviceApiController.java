@@ -1,0 +1,38 @@
+package artistic.software.khu.artistic_software_khu.deviceapi;
+
+import artistic.software.khu.artistic_software_khu.common.ApiResponse;
+import artistic.software.khu.artistic_software_khu.device.ClaimRequest;
+import artistic.software.khu.artistic_software_khu.device.ClaimResponse;
+import artistic.software.khu.artistic_software_khu.device.DeviceService;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * 디바이스 API (기기용). "API.md" 8장.
+ *
+ * "device" 패키지와 나누어 둔 이유는 인증 방식이 다르기 때문이다(CLAUDE.md 6장).
+ * 앱은 "X-Access-Uuid" 로 USERS 를 찾고 기기는 "X-Device-Uuid" 로 DEVICES 를
+ * 찾는다. 한 패키지에 섞으면 어느 체인이 어느 컨트롤러를 태우는지 흐려진다.
+ *
+ * claim 만은 **인증 없이** 호출된다. 그 시점의 기기는 아직 신분증이 없고,
+ * 신분증을 받으려고 이 호출을 하는 것이기 때문이다("API.md" 1-1 화이트리스트).
+ */
+@RestController
+@RequestMapping("/device-api/v1")
+public class DeviceApiController {
+
+	private final DeviceService deviceService;
+
+	public DeviceApiController(DeviceService deviceService) {
+		this.deviceService = deviceService;
+	}
+
+	@PostMapping("/claim")
+	public ResponseEntity<ApiResponse<ClaimResponse>> claim(@RequestBody ClaimRequest request) {
+		return ResponseEntity.ok(ApiResponse.success(deviceService.claim(request)));
+	}
+
+}

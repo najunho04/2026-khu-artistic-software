@@ -1,6 +1,7 @@
 package artistic.software.khu.artistic_software_khu.device;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -17,6 +18,20 @@ import org.springframework.data.repository.query.Param;
 public interface DeviceRepository extends JpaRepository<Device, Long> {
 
 	Optional<Device> findByDeviceAccessUuidAndDeletedAtIsNull(UUID deviceAccessUuid);
+
+	Optional<Device> findByIdAndDeletedAtIsNull(Long id);
+
+	List<Device> findAllByChildIdAndDeletedAtIsNullOrderByIdAsc(Long childId);
+
+	int countByChildIdAndDeletedAtIsNull(Long childId);
+
+	/**
+	 * 페어링 코드로 아직 붙지 않은 기기를 찾는다.
+	 *
+	 * claim 이 끝나면 코드를 NULL 로 비우므로, 이미 쓴 코드는 자연히 조회되지
+	 * 않는다. "이미 사용됨" 을 따로 표시하지 않아도 되는 이유다.
+	 */
+	Optional<Device> findByPairingCodeAndDeletedAtIsNull(String pairingCode);
 
 	/**
 	 * 한 자녀에게 붙은 살아 있는 기기를 모두 해제한다. 자녀 삭제와 함께 쓴다.
