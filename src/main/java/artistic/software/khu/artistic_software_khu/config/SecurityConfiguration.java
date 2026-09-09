@@ -58,6 +58,17 @@ public class SecurityConfiguration {
 	};
 
 	/**
+	 * 로그에서 값을 가리는 규칙. 두 체인의 로깅 필터가 같은 것을 나눠 쓴다.
+	 *
+	 * 체인마다 따로 만들지 않는 이유는 가리는 규칙이 앱과 기기에서 다를 이유가
+	 * 없기 때문이다. 하나만 두면 규칙을 고칠 때 한 쪽만 고치는 실수가 없다.
+	 */
+	@Bean
+	SensitiveValueMasker sensitiveValueMasker() {
+		return new SensitiveValueMasker();
+	}
+
+	/**
 	 * 기기용 체인. 경로는 /device-api/v1/** 이다.
 	 *
 	 * 앱용보다 먼저 평가되도록 순서를 앞에 둔다. 두 체인의 담당 경로가 겹치지는
@@ -68,7 +79,9 @@ public class SecurityConfiguration {
 	@Bean
 	@Order(1)
 	SecurityFilterChain deviceApiSecurityFilterChain(
-		HttpSecurity http, DeviceRepository deviceRepository) throws Exception {
+		HttpSecurity http,
+		DeviceRepository deviceRepository,
+		SensitiveValueMasker sensitiveValueMasker) throws Exception {
 
 		http
 			.securityMatcher("/device-api/v1/**")
@@ -88,7 +101,13 @@ public class SecurityConfiguration {
 			// 알아내는" 단계이기 때문이다. 그 필터 자체는 쓰지 않는다.
 			.addFilterBefore(
 				new DeviceAccessUuidAuthenticationFilter(deviceRepository),
-				UsernamePasswordAuthenticationFilter.class);
+				UsernamePasswordAuthenticationFilter.class)
+			// 로깅은 인증보다 "앞" 에 둔다. 인증에 실패한 요청도 기록에 남아야
+			// 하기 때문이다. 뒤에 두면 401 로 끊긴 요청이 로그에 아예 안 남아
+			// "기기가 연결이 안 된다" 는 신고가 들어왔을 때 볼 것이 없다.
+			.addFilterBefore(
+				new RequestLoggingFilter(sensitiveValueMasker),
+				DeviceAccessUuidAuthenticationFilter.class);
 
 		return http.build();
 	}
@@ -102,8 +121,10 @@ public class SecurityConfiguration {
 	@Bean
 	@Order(2)
 	SecurityFilterChain appSecurityFilterChain(
-		HttpSecurity http, ObjectMapper objectMapper, UserRepository userRepository)
-		throws Exception {
+		HttpSecurity http,
+		ObjectMapper objectMapper,
+		UserRepository userRepository,
+		SensitiveValueMasker sensitiveValueMasker) throws Exception {
 
 		http
 			.securityMatcher("/api/v1/**")
@@ -117,7 +138,10 @@ public class SecurityConfiguration {
 				.authenticationEntryPoint(new CommonAuthenticationEntryPoint(objectMapper)))
 			.addFilterBefore(
 				new AccessUuidAuthenticationFilter(userRepository),
-				UsernamePasswordAuthenticationFilter.class);
+				UsernamePasswordAuthenticationFilter.class)
+			.addFilterBefore(
+				new RequestLoggingFilter(sensitiveValueMasker),
+				AccessUuidAuthenticationFilter.class);
 
 		return http.build();
 	}
