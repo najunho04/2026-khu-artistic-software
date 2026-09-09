@@ -11,9 +11,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import artistic.software.khu.artistic_software_khu.auth.AuthenticationService;
+import artistic.software.khu.artistic_software_khu.device.DeviceRepository;
+import artistic.software.khu.artistic_software_khu.user.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
@@ -24,10 +28,14 @@ import org.springframework.test.web.servlet.MockMvc;
  * 헤더로 보내고, 기기는 페어링 때 발급한 "device_access_uuid" 를
  * "X-Device-Uuid" 헤더로 보낸다. 읽는 헤더도 조회하는 테이블도 다르다.
  *
- * 컨트롤러가 아직 하나도 없는 상태에서 이 테스트가 성립하는 이유는, 보안 필터가
- * 컨트롤러보다 먼저 돌기 때문이다. 보호된 경로는 컨트롤러가 없어도 401 이 나가고,
- * 화이트리스트 경로는 필터를 통과한 뒤 컨트롤러가 없어서 404 가 난다.
- * 그래서 화이트리스트 검증은 "401 이 아님" 으로 확인한다.
+ * 여기서 확인하는 것은 "경로별로 인증을 요구하는가" 하나다. 헤더 값으로 유저를
+ * 제대로 찾는지는 실제 DB 를 띄우는 AuthenticationApiIntegrationTest 가 맡는다.
+ * 나누어 둔 이유는 경로 규칙 하나 바꿀 때마다 컨테이너가 뜨기를 기다리지 않기
+ * 위해서다.
+ *
+ * 화이트리스트 검증을 "401 이 아님" 으로 하는 이유는, 통과한 뒤에 무엇이
+ * 나오는지가 경로마다 다르기 때문이다. 컨트롤러가 있으면 본문이 없어 400 이 나고
+ * 없으면 404 가 난다. 어느 쪽이든 "필터를 통과했다" 는 뜻은 같다.
  */
 @WebMvcTest
 @Import(SecurityConfiguration.class)
@@ -35,6 +43,28 @@ class SecurityConfigurationTest {
 
 	@Autowired
 	private MockMvc mockMvc;
+
+	// 두 인증 필터가 이 저장소들을 필요로 한다. 여기서는 "가짜" 를 끼운다.
+	//
+	// 이 테스트가 확인하려는 것은 "경로별로 인증을 요구하는가" 이지
+	// "헤더 값으로 유저를 제대로 찾는가" 가 아니기 때문이다. 뒤엣것은 실제 DB 를
+	// 띄우는 AuthenticationApiIntegrationTest 가 확인한다. 여기서까지 DB 를
+	// 띄우면 경로 규칙 하나 바꿀 때마다 컨테이너가 뜨기를 기다려야 한다.
+	//
+	// 가짜는 어떤 값을 물어도 "없음" 을 돌려주므로, 아래 테스트들은 전부
+	// "인증되지 않은 요청" 으로 다뤄진다. 그것이 여기서 필요한 상태다.
+	@MockitoBean
+	private UserRepository userRepository;
+
+	@MockitoBean
+	private DeviceRepository deviceRepository;
+
+	// 이 슬라이스는 컨트롤러를 전부 끌어오므로 그것들이 쓰는 서비스도 있어야 한다.
+	// 여기서 실제 서비스가 필요하지는 않다. 확인하려는 것이 "요청이 컨트롤러까지
+	// 가는가 마는가" 이지 컨트롤러가 무엇을 하는가가 아니기 때문이다.
+	// 컨트롤러가 늘면 이 목록도 늘어난다.
+	@MockitoBean
+	private AuthenticationService authenticationService;
 
 	@Test
 	@DisplayName("토큰 없이 앱 API 를 호출하면 401 이고 공통 error 형태로 나간다")

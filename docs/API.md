@@ -252,7 +252,7 @@
 | key | 타입 | 필수 | 설명 |
 |---|---|---|---|
 | email | string | Y | 형식 검사만 수행. 실제 발송·인증 없음 |
-| password | string | Y | 🔺 최소 길이·문자 조합 정책 미확정 (15장 #2) |
+| password | string | Y | **최소 8자.** 문자 조합 규칙은 두지 않음 |
 
 **Response 201**
 
@@ -271,7 +271,7 @@
 - `name` 이 `null` 이면 앱은 온보딩 1차(보호자 성명 입력)로 분기합니다. 소셜 로그인 시절의 `isFirstLogin` 필드를 대신합니다. 가입과 로그인이 분리되어 "이번이 첫 로그인인가" 를 서버가 따로 알려줄 이유가 없어졌기 때문입니다.
 - 비밀번호는 **되돌릴 수 없는 형태로 바꿔** `USERS.password_hash` 에 저장합니다. 평문은 로그를 포함해 어디에도 남기지 않습니다.
 
-**Error**: `AUTH_INVALID_EMAIL_FORMAT` 400, `AUTH_EMAIL_ALREADY_EXISTS` 409
+**Error**: `AUTH_INVALID_EMAIL_FORMAT` 400, `INVALID_INPUT` 400(비밀번호가 8자 미만), `AUTH_EMAIL_ALREADY_EXISTS` 409
 
 ### POST /auth/login — 로그인
 
@@ -1273,8 +1273,7 @@
 | # | 항목 | 영향 | 결정 시한 |
 |---|---|---|---|
 | 1 | 기기 API에 공통 envelope 적용 여부 | 디바이스 API 2종, 기기 펌웨어 | Phase 1 이전 |
-| 2 | **비밀번호 해시 방식**과 **최소 길이 · 문자 조합 정책** | `POST /auth/signup` 구현 자체 | Phase 1 |
-| 12 | **요청·응답 로깅에서 가릴 항목** (`password`, `accessUuid`, `deviceAccessUuid`, `pairingCode`) | 보안 설정의 로깅 필터 | Phase 1 (1-2 마무리 전) |
+| 2 | **요청·응답 로깅에서 가릴 항목** (`password`, `accessUuid`, `deviceAccessUuid`, `pairingCode`) | 보안 설정의 로깅 필터 | Phase 1 (1-2 마무리 전) |
 | 3 | `pairingCode` **자릿수 · 문자 구성** | 페어링 코드 생성기 구현 자체 | Phase 2 |
 | 4 | 회원 탈퇴 시 cascade 정책 | `DELETE /users/me` 구현 자체 | Phase 2 |
 | 5 | 페어링 폴링 **주기** (몇 초마다 호출할지) | 앱·서버 합의 사항. **타임아웃은 10분으로 확정** | Phase 2 |
@@ -1290,6 +1289,8 @@
 
 | 항목 | 결정 |
 |---|---|
+| **비밀번호 해시 방식** | ✅ **bcrypt** (`BCryptPasswordEncoder`, 기본 강도 10). Spring Security 에 이미 들어 있어 의존성이 늘지 않음 (2026-09-09) |
+| **비밀번호 정책** | ✅ **최소 8자, 문자 조합 규칙 없음.** 조합 규칙은 사용자가 기억하기 어려운 비밀번호를 만들게 해 오히려 재사용을 부른다 (2026-09-09) |
 | **JWT 서명 알고리즘 · 키 관리** | ✅ **소멸.** JWT 를 쓰지 않기로 해 결정할 대상이 없어짐 (2026-09-09) |
 | **access/refresh 토큰 만료 · rotation** | ✅ **소멸.** 만료 없는 UUID 방식으로 전환 (2026-09-09) |
 | **기기 `token` · `secret` 해시 방식** | ✅ **소멸.** 기기 토큰 체계 삭제 (2026-09-09) |

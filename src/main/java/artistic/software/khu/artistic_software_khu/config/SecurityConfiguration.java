@@ -6,7 +6,10 @@ import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import artistic.software.khu.artistic_software_khu.device.DeviceRepository;
+import artistic.software.khu.artistic_software_khu.user.UserRepository;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import tools.jackson.databind.ObjectMapper;
@@ -60,11 +63,13 @@ public class SecurityConfiguration {
 	 * 앱용보다 먼저 평가되도록 순서를 앞에 둔다. 두 체인의 담당 경로가 겹치지는
 	 * 않지만, 순서를 명시해 두면 나중에 경로가 늘어나도 의도가 남는다.
 	 *
-	 * JWT 필터를 "달지 않는" 것이 이 체인의 요점이다.
+	 * 앱용 필터를 "달지 않는" 것이 이 체인의 요점이다. 대신 기기용 필터를 단다.
 	 */
 	@Bean
 	@Order(1)
-	SecurityFilterChain deviceApiSecurityFilterChain(HttpSecurity http) throws Exception {
+	SecurityFilterChain deviceApiSecurityFilterChain(
+		HttpSecurity http, DeviceRepository deviceRepository) throws Exception {
+
 		http
 			.securityMatcher("/device-api/v1/**")
 			.csrf(csrf -> csrf.disable())
@@ -77,7 +82,13 @@ public class SecurityConfiguration {
 			// (ROADMAP 0-1) 응답 본문 없이 상태 코드만 내보낸다.
 			// 결정이 나오면 여기에 본문을 쓰는 진입점을 붙인다.
 			.exceptionHandling(exception -> exception
-				.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)));
+				.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+			// 인증 정보를 읽는 자리에 우리 필터를 끼운다. 아이디와 비밀번호를
+			// 받는 기본 필터 자리에 넣는 이유는 그 지점이 "요청에서 신원을
+			// 알아내는" 단계이기 때문이다. 그 필터 자체는 쓰지 않는다.
+			.addFilterBefore(
+				new DeviceAccessUuidAuthenticationFilter(deviceRepository),
+				UsernamePasswordAuthenticationFilter.class);
 
 		return http.build();
 	}
@@ -90,7 +101,8 @@ public class SecurityConfiguration {
 	 */
 	@Bean
 	@Order(2)
-	SecurityFilterChain appSecurityFilterChain(HttpSecurity http, ObjectMapper objectMapper)
+	SecurityFilterChain appSecurityFilterChain(
+		HttpSecurity http, ObjectMapper objectMapper, UserRepository userRepository)
 		throws Exception {
 
 		http
@@ -102,7 +114,10 @@ public class SecurityConfiguration {
 				.requestMatchers(APP_PUBLIC_PATHS).permitAll()
 				.anyRequest().authenticated())
 			.exceptionHandling(exception -> exception
-				.authenticationEntryPoint(new CommonAuthenticationEntryPoint(objectMapper)));
+				.authenticationEntryPoint(new CommonAuthenticationEntryPoint(objectMapper)))
+			.addFilterBefore(
+				new AccessUuidAuthenticationFilter(userRepository),
+				UsernamePasswordAuthenticationFilter.class);
 
 		return http.build();
 	}
