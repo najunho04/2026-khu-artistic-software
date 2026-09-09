@@ -3,15 +3,14 @@ package artistic.software.khu.artistic_software_khu.config;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
-import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import artistic.software.khu.artistic_software_khu.common.ErrorCode;
 import artistic.software.khu.artistic_software_khu.device.DeviceRepository;
 import artistic.software.khu.artistic_software_khu.user.UserRepository;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -80,6 +79,7 @@ public class SecurityConfiguration {
 	@Order(1)
 	SecurityFilterChain deviceApiSecurityFilterChain(
 		HttpSecurity http,
+		ObjectMapper objectMapper,
 		DeviceRepository deviceRepository,
 		SensitiveValueMasker sensitiveValueMasker) throws Exception {
 
@@ -91,11 +91,13 @@ public class SecurityConfiguration {
 			.authorizeHttpRequests(authorize -> authorize
 				.requestMatchers(DEVICE_PUBLIC_PATHS).permitAll()
 				.anyRequest().authenticated())
-			// 기기 API 에 공통 envelope 를 적용할지가 아직 정해지지 않아
-			// (ROADMAP 0-1) 응답 본문 없이 상태 코드만 내보낸다.
-			// 결정이 나오면 여기에 본문을 쓰는 진입점을 붙인다.
+			// 기기 API 도 앱과 같은 공통 envelope 를 쓴다(2026-09-09 확정, 0-1 해소).
+			// 다만 에러 코드는 DEVICE_UNAUTHORIZED 로 다르다. 기기는 이 코드를
+			// 받으면 스스로 복구할 방법이 없어 재페어링을 안내해야 하는데,
+			// 앱과 같은 코드를 쓰면 그 구분이 사라진다.
 			.exceptionHandling(exception -> exception
-				.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+				.authenticationEntryPoint(
+					new CommonAuthenticationEntryPoint(objectMapper, ErrorCode.DEVICE_UNAUTHORIZED)))
 			// 인증 정보를 읽는 자리에 우리 필터를 끼운다. 아이디와 비밀번호를
 			// 받는 기본 필터 자리에 넣는 이유는 그 지점이 "요청에서 신원을
 			// 알아내는" 단계이기 때문이다. 그 필터 자체는 쓰지 않는다.
@@ -135,7 +137,8 @@ public class SecurityConfiguration {
 				.requestMatchers(APP_PUBLIC_PATHS).permitAll()
 				.anyRequest().authenticated())
 			.exceptionHandling(exception -> exception
-				.authenticationEntryPoint(new CommonAuthenticationEntryPoint(objectMapper)))
+				.authenticationEntryPoint(
+					new CommonAuthenticationEntryPoint(objectMapper, ErrorCode.UNAUTHORIZED)))
 			.addFilterBefore(
 				new AccessUuidAuthenticationFilter(userRepository),
 				UsernamePasswordAuthenticationFilter.class)

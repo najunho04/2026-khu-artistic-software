@@ -107,12 +107,33 @@ class SecurityConfigurationTest {
 	}
 
 	@Test
-	@DisplayName("토큰 없이 기기 API 를 호출하면 401 이다")
-	void deviceApiWithoutTokenReturnsUnauthorized() throws Exception {
-		// 응답 "형태" 는 확인하지 않는다. 기기 API 에 공통 envelope 를 적용할지가
-		// 아직 정해지지 않았기 때문이다 (ROADMAP 0-1). 상태 코드만 고정한다.
+	@DisplayName("헤더 없이 기기 API 를 호출하면 401 이고 앱과 같은 공통 error 형태다")
+	void deviceApiWithoutHeaderReturnsUnauthorizedInCommonFormat() throws Exception {
+		// 2026-09-09 확정 — 기기 API 도 앱과 같은 공통 envelope 를 쓴다.
+		// 기기 펌웨어의 파서 부담보다 응답 처리 코드가 두 벌로 갈라지는 비용이
+		// 크다고 보았다.
+		//
+		// 코드는 UNAUTHORIZED 가 아니라 DEVICE_UNAUTHORIZED 다("API.md" 3-4).
+		// 기기가 이 코드를 받으면 자체 복구할 방법이 없어 재페어링을 안내해야
+		// 하는데, 앱과 같은 코드를 쓰면 그 구분이 사라진다.
 		mockMvc.perform(post("/device-api/v1/sync"))
-			.andExpect(status().isUnauthorized());
+			.andExpect(status().isUnauthorized())
+			.andExpect(jsonPath("$.success").value(false))
+			.andExpect(jsonPath("$.data").doesNotExist())
+			.andExpect(jsonPath("$.error.code").value("DEVICE_UNAUTHORIZED"))
+			.andExpect(jsonPath("$.error.message").value("기기 인증에 실패했습니다."));
+	}
+
+	@Test
+	@DisplayName("앱과 기기의 인증 실패 코드는 서로 다르다")
+	void appAndDeviceUseDifferentUnauthorizedCodes() throws Exception {
+		// 같은 코드를 쓰면 기기가 "재페어링이 필요한 상황" 과 "그냥 로그인이
+		// 필요한 상황" 을 구분할 수 없다. 앱은 code 로 분기한다("API.md" 2-2).
+		mockMvc.perform(get("/api/v1/users/me"))
+			.andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"));
+
+		mockMvc.perform(post("/device-api/v1/sync"))
+			.andExpect(jsonPath("$.error.code").value("DEVICE_UNAUTHORIZED"));
 	}
 
 	@Test
