@@ -8,6 +8,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.UUID;
+import org.hibernate.annotations.Generated;
+import org.hibernate.generator.EventType;
 
 /**
  * 보호자 계정. "ERD.md" 1장 USERS 를 그대로 옮긴다.
@@ -45,6 +47,15 @@ public class User {
 	@Column(name = "name")
 	private String name;
 
+	// 값을 DB 가 채운다(V1 의 "default now()"). insertable = false 로 두어
+	// 하이버네이트가 INSERT 에 이 컬럼을 넣지 않게 한다.
+	//
+	// "@Generated(event = INSERT)" 가 반드시 필요하다. 이것이 없으면 저장한
+	// 뒤에도 객체의 값이 null 로 남는다. 하이버네이트가 INSERT 만 하고 결과를
+	// 다시 읽지 않기 때문이다. 같은 트랜잭션 안에서 방금 만든 유저를 조회하면
+	// createdAt 이 비어 나가는데, DB 에는 값이 멀쩡히 들어 있어서 원인을
+	// 찾기가 헷갈린다.
+	@Generated(event = EventType.INSERT)
 	@Column(name = "created_at", nullable = false, insertable = false, updatable = false)
 	private Instant createdAt;
 
@@ -88,6 +99,13 @@ public class User {
 	 */
 	public void clearAccessUuid() {
 		this.accessUuid = null;
+	}
+
+	/**
+	 * 보호자 성명을 채운다. 온보딩 1차에서 처음 불리고, 이후 수정에도 쓰인다.
+	 */
+	public void changeName(String name) {
+		this.name = name;
 	}
 
 	public Long getId() {

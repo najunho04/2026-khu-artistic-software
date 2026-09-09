@@ -1,6 +1,7 @@
 package artistic.software.khu.artistic_software_khu.routine;
 
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -27,6 +28,15 @@ public interface BigRoutineRepository extends JpaRepository<BigRoutine, Long> {
 	 * "API.md" 9장에 적힌 대로이고, 특히 스몰루틴을 과거에 더하면
 	 * 이미 지나간 날의 이행률이 떨어지기 때문이다.
 	 */
+	/**
+	 * 지정한 날짜들의 루틴만 읽는다. 기기 동기화가 쓴다.
+	 *
+	 * 기간(between)이 아니라 목록(in)인 이유는 기기가 연속되지 않은 날짜를
+	 * 요청할 수 있기 때문이다. 오프라인이었던 날들을 골라 받아 가는 경우다.
+	 */
+	List<BigRoutine> findAllByChildIdAndRoutineDateInAndDeletedAtIsNullOrderByRoutineDateAscIdAsc(
+		Long childId, Collection<LocalDate> routineDates);
+
 	List<BigRoutine> findAllBySeriesIdAndRoutineDateGreaterThanEqualAndDeletedAtIsNull(
 		UUID seriesId, LocalDate fromDate);
 

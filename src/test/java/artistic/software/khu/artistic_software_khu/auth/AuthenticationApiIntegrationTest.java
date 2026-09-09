@@ -53,7 +53,7 @@ class AuthenticationApiIntegrationTest {
 	// "API.md" 1-1 이 정한 기기 인증 헤더.
 	private static final String DEVICE_HEADER = "X-Device-Uuid";
 
-	// 보호된 앱 경로. 컨트롤러가 아직 없어 통과하면 404 가 난다.
+	// 보호된 앱 경로. 인증이 통과했는지 확인하는 데 쓴다.
 	private static final String PROTECTED_APP_PATH = "/api/v1/users/me";
 
 	// 보호된 기기 경로. 마찬가지로 컨트롤러가 없다.
@@ -181,10 +181,10 @@ class AuthenticationApiIntegrationTest {
 		mockMvc.perform(get(PROTECTED_APP_PATH).header(APP_HEADER, firstUuid))
 			.andExpect(status().isUnauthorized());
 
-		// 통과했으므로 컨트롤러가 없어 404 가 난다. 문서 3-1 의 NOT_FOUND 다.
+		// 새 값은 통과한다. 여기서 확인하는 것은 "옛 값이 막히고 새 값이
+		// 통한다" 는 대비이지 응답 내용이 아니다.
 		mockMvc.perform(get(PROTECTED_APP_PATH).header(APP_HEADER, secondUuid))
-			.andExpect(status().isNotFound())
-			.andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
+			.andExpect(status().isOk());
 	}
 
 	@Test
@@ -279,9 +279,14 @@ class AuthenticationApiIntegrationTest {
 	void deviceHeaderPassesDeviceApi() throws Exception {
 		String deviceAccessUuid = insertPairedDevice();
 
-		// 통과하면 컨트롤러가 없어 404 가 난다. 401 이 아니라는 것이 확인하려는 바다.
-		mockMvc.perform(post(PROTECTED_DEVICE_PATH).header(DEVICE_HEADER, deviceAccessUuid))
-			.andExpect(status().isNotFound());
+		// 여기서 확인하는 것은 "필터를 통과했는가" 하나다. sync 가 실제로 무엇을
+		// 하는지는 DeviceSyncIntegrationTest 가 본다. 그래서 본문은 최소한만 보낸다.
+		mockMvc.perform(post(PROTECTED_DEVICE_PATH)
+				.header(DEVICE_HEADER, deviceAccessUuid)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{"battery": 50, "firmware": "1.0.0", "completions": [], "dates": []}"""))
+			.andExpect(status().isOk());
 	}
 
 	@Test

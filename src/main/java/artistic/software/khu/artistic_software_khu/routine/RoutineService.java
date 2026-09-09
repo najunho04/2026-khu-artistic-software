@@ -278,6 +278,103 @@ public class RoutineService {
 	}
 
 	/**
+	 * 지정한 날짜들의 루틴을 읽는다. 기기 동기화(4-1)가 쓴다.
+	 *
+	 * 소유권 검사를 하지 않는 대신 childId 를 그대로 받는다. 부르는 쪽이
+	 * 기기 인증 필터가 이미 확인한 "그 기기가 붙은 자녀" 를 넘기기 때문이다.
+	 * 기기는 자기 자녀 말고는 지정할 방법이 없다.
+	 *
+	 * 루틴을 만들지 않는다. 있는 것만 읽는다. 기기에서는 루틴 생성이
+	 * 불가능하고, 빅루틴은 앱이 요청할 때 즉시 만들어진다.
+	 */
+	@Transactional(readOnly = true)
+	public List<RoutineDayResponse> findRoutinesOn(Long childId, List<LocalDate> dates) {
+		if (dates == null || dates.isEmpty()) {
+			return List.of();
+		}
+
+		List<BigRoutine> bigRoutines = bigRoutineRepository
+			.findAllByChildIdAndRoutineDateInAndDeletedAtIsNullOrderByRoutineDateAscIdAsc(
+				childId, dates);
+
+		Map<Long, List<SmallRoutine>> smallRoutinesByBigRoutineId = loadSmallRoutines(bigRoutines);
+
+		Map<LocalDate, List<BigRoutineResponse>> byDate = new LinkedHashMap<>();
+
+		for (BigRoutine bigRoutine : bigRoutines) {
+			byDate.computeIfAbsent(bigRoutine.getRoutineDate(), date -> new ArrayList<>())
+				.add(BigRoutineResponse.of(
+					bigRoutine,
+					smallRoutinesByBigRoutineId.getOrDefault(bigRoutine.getId(), List.of())));
+		}
+
+		return byDate.entrySet().stream()
+			.map(entry -> new RoutineDayResponse(entry.getKey(), entry.getValue()))
+			.toList();
+	}
+
+	/**
+	 * 완료 기록을 반영한다. 기기 동기화(4-1)가 쓴다.
+	 *
+	 * **UPDATE 기반이라 멱등성이 자연히 보장된다.** 같은 요청이 다시 와도 같은
+	 * 행을 같은 값으로 덮어쓸 뿐이다. 기기는 네트워크가 끊기면 재전송 외에 할 수
+	 * 있는 일이 없으므로 이 성질이 없으면 완료가 두 번 쌓인다.
+	 *
+	 * 없는 할 일은 **건너뛴다.** 기기가 오프라인인 동안 보호자가 지웠을 뿐이고
+	 * 흔하게 일어난다. 전체를 실패시키면 기기는 재시도밖에 못 하는데 다시 보내도
+	 * 똑같이 실패해, 그 뒤의 완료가 영원히 올라가지 못한다.
+	 *
+	 * @return 실제로 반영된 개수
+	 */
+	@Transactional
+	public int applyCompletions(Long childId, List<CompletionApplication> completions) {
+		if (completions == null || completions.isEmpty()) {
+			return 0;
+		}
+
+		int accepted = 0;
+
+		for (CompletionApplication completion : completions) {
+			if (completion.smallRoutineId() == null) {
+				continue;
+			}
+
+			SmallRoutine smallRoutine = smallRoutineRepository
+				.findByIdAndDeletedAtIsNull(completion.smallRoutineId())
+				.orElse(null);
+
+			if (smallRoutine == null) {
+				continue;
+			}
+
+			// 다른 아이의 할 일이 섞여 들어오면 건너뛴다. 기기가 id 를 지어내
+			// 남의 아이 기록을 고치는 것을 막는다.
+			BigRoutine bigRoutine = bigRoutineRepository
+				.findByIdAndDeletedAtIsNull(smallRoutine.getBigRoutineId())
+				.orElse(null);
+
+			if (bigRoutine == null || !bigRoutine.getChildId().equals(childId)) {
+				continue;
+			}
+
+			smallRoutine.applyCompletion(completion.status(), completion.completedAt());
+			accepted++;
+		}
+
+		return accepted;
+	}
+
+	/**
+	 * 완료 기록 하나를 서비스 안에서 다루는 형태.
+	 *
+	 * 기기 요청 DTO 를 그대로 받지 않는 이유는 routine 패키지가 deviceapi 패키지를
+	 * 알게 되기 때문이다. 루틴 도메인은 누가 완료를 올렸는지 알 필요가 없다.
+	 */
+	public record CompletionApplication(
+		Long smallRoutineId, String status, java.time.Instant completedAt) {
+	}
+
+	/**
 	 * 여러 빅루틴의 할 일을 한 번에 읽어 빅루틴 id 로 묶는다.
 	 *
 	 * 빅루틴마다 따로 물어보면 한 달치 조회에 수십 번의 질의가 나간다.

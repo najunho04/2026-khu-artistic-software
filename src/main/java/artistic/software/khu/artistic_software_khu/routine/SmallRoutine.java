@@ -81,6 +81,26 @@ public class SmallRoutine {
 		}
 	}
 
+	/**
+	 * 완료 상태를 반영한다. 기기 동기화가 부른다.
+	 *
+	 * 같은 값을 다시 넣어도 결과가 같다. 이것이 멱등성의 실체다. 기기가
+	 * 네트워크 실패로 같은 기록을 재전송해도 행이 늘거나 값이 어긋나지 않는다.
+	 *
+	 * 되돌리는 경우(DONE -> PENDING)도 허용한다. 아이가 실수로 눌렀다가
+	 * 취소하는 일이 실제로 일어난다. 그때 완료 시각도 함께 비운다.
+	 */
+	public void applyCompletion(String status, Instant completedAt) {
+		if (STATUS_DONE.equals(status)) {
+			this.status = STATUS_DONE;
+			this.completedAt = completedAt;
+			return;
+		}
+
+		this.status = STATUS_PENDING;
+		this.completedAt = null;
+	}
+
 	public void changeSortOrder(int sortOrder) {
 		this.sortOrder = sortOrder;
 	}

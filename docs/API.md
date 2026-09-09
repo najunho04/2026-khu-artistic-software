@@ -335,12 +335,14 @@
     "userId": 1,
     "name": "김보호",
     "email": "parent@example.com",
-    "provider": "GOOGLE",
     "createdAt": "2026-09-01T08:30:00Z"
   },
   "error": null
 }
 ```
+
+- **`provider` 필드는 삭제되었습니다** (2026-09-09). 소셜 로그인을 없애면서 값이 항상 비게 되었습니다. 컬럼은 나중을 위해 DB 에 남겨 두었지만 응답에 담을 이유가 없습니다.
+- `name` 이 `null` 이면 앱은 아직 온보딩 1차를 마치지 않은 것으로 봅니다.
 
 ### PATCH /users/me — 내 정보 수정
 

@@ -12,8 +12,8 @@ import java.util.UUID;
 /**
  * 기기. "ERD.md" 1장 DEVICES.
  *
- * 페어링 관련 컬럼을 Phase 2-2 에서 더했다. 배터리 · 펌웨어 · 마지막 동기화
- * 시각은 그것을 읽고 쓰는 기능이 Phase 4(동기화)에 있어 그때 더한다.
+ * 페어링 관련 컬럼을 Phase 2-2 에서, 배터리 · 펌웨어 · 마지막 동기화 시각을
+ * Phase 4-1(동기화)에서 더했다. 필요해진 시점에 하나씩 붙였다는 뜻이다.
  * 쓰지 않는 필드를 미리 만들어 두면 "이 값이 채워지고 있나" 를 매번 확인해야 한다.
  *
  * ddl-auto=validate 는 엔티티에 없는 테이블 컬럼을 문제 삼지 않으므로
@@ -56,6 +56,21 @@ public class Device {
 
 	@Column(name = "paired_at")
 	private Instant pairedAt;
+
+	// 아래 셋은 기기가 sync 할 때마다 갱신된다. 앱의 기기 목록 화면이
+	// "배터리가 얼마나 남았나", "마지막으로 언제 연결됐나" 를 보여주는 근거다.
+	//
+	// 페어링만 하고 아직 한 번도 sync 하지 않은 기기는 셋 다 비어 있다.
+	// 억지로 0 이나 현재 시각으로 채우지 않는다. "배터리 0%" 와 "아직 모름" 은
+	// 완전히 다른 뜻이고, 앱이 그 둘을 구분해 보여줘야 하기 때문이다.
+	@Column(name = "battery_level")
+	private Integer batteryLevel;
+
+	@Column(name = "firmware_version")
+	private String firmwareVersion;
+
+	@Column(name = "last_synced_at")
+	private Instant lastSyncedAt;
 
 	// 페어링이 완료되는 순간 서버가 발급해 기기에 내려주는 값.
 	// 기기는 이후 요청마다 이 값을 헤더에 담는다.
@@ -136,6 +151,24 @@ public class Device {
 		return pairingCodeExpiresAt != null && now.isAfter(pairingCodeExpiresAt);
 	}
 
+	/**
+	 * 동기화 결과를 기록한다. sync 호출마다 불린다.
+	 *
+	 * 펌웨어는 값이 왔을 때만 바꾼다. 기기가 보내지 않았다고 해서 이전에 알던
+	 * 버전을 지울 이유가 없다.
+	 */
+	public void recordSync(Integer batteryLevel, String firmwareVersion, Instant syncedAt) {
+		if (batteryLevel != null) {
+			this.batteryLevel = batteryLevel;
+		}
+
+		if (firmwareVersion != null && !firmwareVersion.isBlank()) {
+			this.firmwareVersion = firmwareVersion;
+		}
+
+		this.lastSyncedAt = syncedAt;
+	}
+
 	public void changeNickname(String nickname) {
 		if (nickname != null) {
 			this.nickname = nickname;
@@ -176,6 +209,18 @@ public class Device {
 
 	public Instant getPairedAt() {
 		return pairedAt;
+	}
+
+	public Integer getBatteryLevel() {
+		return batteryLevel;
+	}
+
+	public String getFirmwareVersion() {
+		return firmwareVersion;
+	}
+
+	public Instant getLastSyncedAt() {
+		return lastSyncedAt;
 	}
 
 	public UUID getDeviceAccessUuid() {
