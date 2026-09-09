@@ -570,7 +570,7 @@ DB 는 Testcontainers 의 실제 PostgreSQL 17 을 씁니다.
 >
 > 이 결정으로 **가장 설계 난도가 높던 구간이 사라졌습니다.** 없어진 것: 지연 생성 트리거 3곳, 동시 생성 방어, `unique(template_id, routine_date)` 제약, 배치 스케줄러, "조회로는 만들어지는데 sync 로는 안 만들어지는" 종류의 버그.
 
-### 3-1. 빅루틴 / 스몰루틴 CRUD + 반복 생성
+### 3-1. 빅루틴 / 스몰루틴 CRUD + 반복 생성 — ✅ 완료 (2026-09-09)
 
 **RED — 먼저 쓸 실패 테스트**
 
@@ -625,7 +625,7 @@ DB 는 Testcontainers 의 실제 PostgreSQL 17 을 씁니다.
 
 > ❓ **질문 필요** — `RANGE` 의 **기간 길이 상한**이 미확정입니다. 확정 전까지 설정값으로 주입합니다. `DATES` 의 12개와는 별개 값입니다.
 
-### 3-2. 루틴 템플릿 (저장해둔 양식)
+### 3-2. 루틴 템플릿 (저장해둔 양식) — ✅ 완료 (2026-09-09)
 
 지연 생성이 없어지면서 **가장 단순한 구간이 되었습니다.** 값을 저장하고 꺼내 쓰는 것이 전부입니다.
 
@@ -644,7 +644,7 @@ DB 는 Testcontainers 의 실제 PostgreSQL 17 을 씁니다.
 
 **진행 상황** — ✅ **완료.** `RoutineTemplateService` · `RoutineTemplateController`, 엔드포인트 4개.
 
-### 3-3. series_id 규칙 검증
+### 3-3. series_id 규칙 검증 — ✅ 완료 (2026-09-09)
 
 `series_id` 는 반복으로 만든 루틴을 하나로 묶는 값이고, **통계의 기준이자 수정 · 삭제 범위의 기준**입니다. **규칙 자체를 테스트로 고정**해 둡니다.
 
@@ -711,24 +711,39 @@ DB 는 Testcontainers 의 실제 PostgreSQL 17 을 씁니다.
 
 ---
 
-## Phase 5 — 대시보드 · 통계 (칸반: **낮음**)
+## Phase 5 — 대시보드 · 통계 (칸반: **낮음**) — ✅ 완료 (2026-09-09)
 
-**목표: 보호자가 이행률과 인사이트를 본다**
+**목표: 보호자가 하루 · 일주일 · 한달 성취도를 본다**
+
+**산출물** — `dashboard/`(StatsPeriod · StatsRepository · StatsService · StatsController · DTO 5개). 테스트는 `StatsPeriodTest` **13개**(DB 없이) + `StatsApiIntegrationTest` **18개**.
+
+**엔드포인트 3개** — `GET /children/{childId}/stats`, `.../stats/missions`, `.../dashboard`.
+
+> **함께 채운 것** — `DeviceResponse` 에 `battery` · `firmwareVersion` · `lastSyncedAt` 을 더했습니다. 4-3 의 RED 에 있었지만 그 컬럼들이 `Device` 엔티티에 매핑되지 않아 빠져 있던 항목입니다(4-1 에서 매핑됨). 이로써 **4-3 의 남은 RED 가 전부 닫혔습니다.**
+
+> ✅ **범위 확정 (2026-09-09)** — 통계는 **세 구간(`DAY` / `WEEK` / `MONTH`)만** 봅니다. 자유 기간 조회를 없앴고, 문구형 인사이트 대신 그 세 구간 이행률을 대시보드에 담습니다. **이것으로 Phase 5 를 막고 있던 블로커 2건이 모두 해소됐습니다** — 인사이트 종류·생성 규칙(15장 #9)과 이행률 분모 규칙.
 
 **RED — 먼저 쓸 실패 테스트**
 
-- 대시보드 응답에 `devices` **배열**이 있고, 단일 `battery` 필드는 **없음** (breaking change를 테스트로 못 박아 되돌아가지 않게 함)
-- `thisWeek` / `yesterday` 각각 `completionRate`·`doneCount`·`totalCount`
-- `GET /stats` → `summary` + 날짜별 `daily` 배열
-- `GET /stats/missions` → `series_id` 기준으로 묶임
-- **이름이 바뀐 미션은 한 행으로 집계되고, `title`은 가장 최근 값**
+- `period=DAY` / `WEEK` / `MONTH` 각각 `from`·`to`·`doneCount`·`totalCount`·`completionRate`
+- **지운 할 일은 분모에서 빠진다** — 4개 중 2개 완료 후 1개 삭제 → `2/3`
+- 할 일이 하나도 없는 기간 → `completionRate: 0` (100 이 아니다)
+- 기간 밖의 할 일은 세지 않는다
+- 남의 자녀 통계 → 403 `CHILD_FORBIDDEN`
+- 알 수 없는 `period` → 400 `INVALID_INPUT`
+- `stats/missions` 는 `series_id` 로 묶이고 **이름이 바뀌어도 한 행**이며 `title` 은 가장 최근 값
+- `stats/missions` 는 **이행률이 낮은 순**으로 정렬된다
+- 대시보드 응답에 `devices` **배열**이 있고 단일 `battery` 필드는 **없다**
+- 대시보드의 `insights` 에 `day` · `week` · `month` 셋이 모두 있다
+- 아직 sync 하지 않은 기기의 `battery` · `lastSyncedAt` 은 **null 그대로** 나간다
 
 **GREEN — 이렇게 통과시킨다**
 
-- 집계 테이블 없이 `small_routines`를 직접 세는 쿼리로 만듭니다. 미션별 집계는 `series_id`로 묶고 `index(series_id)`를 활용합니다.
-- 대시보드는 이행률 집계와 기기 목록을 각각 구한 뒤 하나의 응답으로 합칩니다.
+- 집계 테이블 없이 `SMALL_ROUTINES` 를 직접 세는 쿼리로 만듭니다. 미션별 집계는 `series_id` 로 묶고 `index(series_id)` 를 활용합니다.
+- 기간 계산을 한 곳(`StatsPeriod`)에 몰아넣습니다. 세 엔드포인트가 같은 규칙을 써야 하는데, 각자 날짜를 계산하면 대시보드의 주간 수치와 `stats?period=WEEK` 가 다르게 나올 수 있습니다.
+- 대시보드는 이행률 집계 세 번과 기기 목록을 각각 구한 뒤 하나의 응답으로 합칩니다. 새로 계산하는 것은 없습니다.
 
-> ❓ **질문 필요** — (1) `insights`의 종류와 생성 규칙이 미확정이라 인사이트 테스트는 보류합니다. (2) **soft delete된 루틴을 이행률의 분모에 넣을지** 가 문서에 명시돼 있지 않습니다. "이행률 통계 보존"이라는 문구는 있지만 계산 규칙까지는 없어서, 이건 반드시 정하고 가야 합니다. 여기서 틀리면 모든 통계 숫자가 조용히 틀립니다.
+> **"최근 N일" 이지 달력 기준이 아닙니다.** 달력 주(월요일 시작)로 하면 월요일 아침에 이행률이 0% 로 보여 사용자가 실패한 것처럼 느낍니다. 주의 시작이 월요일인지 일요일인지를 정해야 하는 문제도 사라집니다.
 
 ---
 
