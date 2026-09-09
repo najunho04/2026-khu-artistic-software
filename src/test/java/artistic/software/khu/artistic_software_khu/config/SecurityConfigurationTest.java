@@ -11,13 +11,15 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import artistic.software.khu.artistic_software_khu.auth.AuthenticationService;
 import artistic.software.khu.artistic_software_khu.device.DeviceRepository;
 import artistic.software.khu.artistic_software_khu.user.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.FilterType;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
@@ -33,11 +35,22 @@ import org.springframework.test.web.servlet.MockMvc;
  * 나누어 둔 이유는 경로 규칙 하나 바꿀 때마다 컨테이너가 뜨기를 기다리지 않기
  * 위해서다.
  *
- * 화이트리스트 검증을 "401 이 아님" 으로 하는 이유는, 통과한 뒤에 무엇이
- * 나오는지가 경로마다 다르기 때문이다. 컨트롤러가 있으면 본문이 없어 400 이 나고
- * 없으면 404 가 난다. 어느 쪽이든 "필터를 통과했다" 는 뜻은 같다.
+ * 화이트리스트 검증을 "401 이 아님" 으로 한다. 컨트롤러를 싣지 않으므로
+ * 통과한 요청은 404 가 되는데, 중요한 것은 그 숫자가 아니라 "필터에 막히지
+ * 않았다" 는 사실이다.
  */
-@WebMvcTest
+// 컨트롤러를 하나도 싣지 않는다.
+//
+// 이 테스트가 확인하는 것은 "어느 경로에 인증이 필요한가" 뿐이고 그 판단은
+// 보안 필터가 컨트롤러보다 먼저 내린다. 컨트롤러를 실으면 그것들이 쓰는
+// 서비스까지 전부 가짜로 채워 넣어야 하고, 컨트롤러가 하나 늘 때마다 이
+// 테스트가 "컨텍스트를 못 띄운다" 며 깨진다. 보안 규칙과 아무 상관이 없는
+// 이유로 깨지는 테스트는 결국 아무도 믿지 않게 된다.
+//
+// 컨트롤러가 없으므로 통과한 요청은 404 가 된다. 그래서 화이트리스트 검증은
+// "401 이 아님" 으로 확인한다.
+@WebMvcTest(excludeFilters = @ComponentScan.Filter(
+	type = FilterType.ANNOTATION, classes = RestController.class))
 @Import(SecurityConfiguration.class)
 class SecurityConfigurationTest {
 
@@ -59,12 +72,6 @@ class SecurityConfigurationTest {
 	@MockitoBean
 	private DeviceRepository deviceRepository;
 
-	// 이 슬라이스는 컨트롤러를 전부 끌어오므로 그것들이 쓰는 서비스도 있어야 한다.
-	// 여기서 실제 서비스가 필요하지는 않다. 확인하려는 것이 "요청이 컨트롤러까지
-	// 가는가 마는가" 이지 컨트롤러가 무엇을 하는가가 아니기 때문이다.
-	// 컨트롤러가 늘면 이 목록도 늘어난다.
-	@MockitoBean
-	private AuthenticationService authenticationService;
 
 	@Test
 	@DisplayName("토큰 없이 앱 API 를 호출하면 401 이고 공통 error 형태로 나간다")

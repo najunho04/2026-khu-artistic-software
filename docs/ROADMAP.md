@@ -467,7 +467,13 @@ Phase 1(1-1 ~ 1-4)에서 아직 만들지 않은 것 전부입니다. **막힌 �
 | claim | `POST /device-api/v1/claim` | 기기 → 서버 |
 | 완료 폴링 | `GET /devices/{deviceId}` (PENDING → ACTIVE) | 앱 |
 
-### 2-1. 자녀 API (칸반: **보통**)
+### 2-1. 자녀 API (칸반: **보통**) — ✅ 완료 (2026-09-09)
+
+**산출물** — `child/`(Child · Relationship · ChildRepository · ChildService · ChildController · DTO 2개), `config/ClockConfiguration`. 테스트는 `ChildApiIntegrationTest` **21개**.
+
+**소유권 검사의 기반이 여기서 만들어졌습니다.** `ChildService.findOwnedChild` 하나가 "없으면 404, 남의 것이면 403" 을 판정하며, Phase 3 루틴 도메인도 이것을 통해 확인합니다. 서비스마다 손으로 `userId` 를 비교하면 한 곳에서 빠뜨렸을 때 그 경로만 남의 자녀가 열립니다.
+
+**시각은 `Clock` 빈으로 주입받습니다.** 코드 안에서 `Instant.now()` 를 직접 부르면 "미래 생년월일 거절" 같은 검증을 테스트로 고정할 수 없습니다.
 
 `POST /children` · `GET /children` · `GET /children/{childId}` · `PATCH` · `DELETE`
 
@@ -548,6 +554,10 @@ DB 는 Testcontainers 의 실제 PostgreSQL 17 을 씁니다.
 ## Phase 3 — 루틴 도메인 (제품 핵심)
 
 **목표: 보호자가 루틴을 만들고 캘린더에서 확인할 수 있다**
+
+> ✅ **소유권 검사 확정 (2026-09-09)** — 이 구간의 모든 엔드포인트가 `X-Access-Uuid` 로 찾은 유저의 자녀인지 확인합니다(`API.md` 1-1-1). 경로에 `:childId` 가 없는 것(`:bigRoutineId` · `:templateId`)도 대상에서 자녀를 거슬러 올라가 검사합니다. 검사가 없으면 id 를 1, 2, 3 으로 바꿔가며 **남의 아이 루틴을 읽고 고칠 수 있습니다.**
+>
+> 그래서 **Phase 2-1(자녀 API)이 선행**입니다. `Child` 엔티티와 "이 자녀가 내 자녀인가" 를 판정하는 조각이 거기서 만들어집니다.
 
 > ✅ **구조 확정 (2026-09-09)** — 반복 생성은 **빅루틴이 직접, 전부 즉시** 처리합니다. 조회 시점에 만들어내던 **지연 생성이 통째로 없어졌습니다.** 템플릿은 반복과 무관한 **저장해둔 양식**이 되었습니다.
 >

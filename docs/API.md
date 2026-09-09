@@ -58,6 +58,19 @@
 
 앱과 기기는 **읽는 헤더도 조회하는 테이블도 다르므로 SecurityFilterChain 을 2개로 분리**합니다. `/device-api/**` 에 앱용 필터가 걸리면 기기 요청이 유저를 찾다가 실패합니다.
 
+### 1-1-1. 소유권 검사 (2026-09-09 확정)
+
+인증은 "누구인가" 만 알려줍니다. **"이 자녀를 건드려도 되는가" 는 별개**이고, 경로에 `:childId` 가 들어가는 모든 엔드포인트가 이 검사를 합니다.
+
+| 부르는 쪽 | 검사 방법 | 통과하지 못하면 |
+|---|---|---|
+| 앱 | `X-Access-Uuid` → `USERS` → 그 유저의 자녀 목록에 `:childId` 가 있는가 | `CHILD_FORBIDDEN` 403 |
+| 기기 | `X-Device-Uuid` → `DEVICES` → 그 기기가 붙은 `child_id` 와 대상이 같은가 | `DEVICE_FORBIDDEN` 403 |
+
+**없는 자녀와 남의 자녀를 구분해 응답합니다.** 없으면 `CHILD_NOT_FOUND` 404, 있지만 내 자녀가 아니면 `CHILD_FORBIDDEN` 403 입니다. 로그인한 사용자에게는 이 구분이 새어 나가도 문제가 없고, 앱이 "잘못된 요청" 과 "권한 없음" 을 다르게 안내할 수 있어야 하기 때문입니다.
+
+기기가 자기 자녀 외의 대상을 부르는 것은 정상적인 앱·기기 동작에서 일어나지 않습니다. 그래도 검사하는 이유는, 기기의 `device_access_uuid` 가 새어 나갔을 때 그 값으로 **다른 아이의 루틴까지 읽히는 것을 막기 위해서**입니다.
+
 > **만료가 없다는 것의 뜻** — 한 번 발급한 `access_uuid` 는 로그아웃하거나 값을 새로 발급하기 전까지 계속 유효합니다. 값이 새어 나가면 되찾을 방법이 로그아웃뿐입니다. 공모전 범위에서 **알고 받아들인 선택**이며, 그 대가로 서명 알고리즘 · 키 관리 · 만료 · 재발급 정책이 전부 사라졌습니다.
 
 ### 1-2. 표기 규칙
@@ -735,7 +748,7 @@
 - **단일 루틴과 복합 루틴을 서버는 구분하지 않습니다.** 스몰루틴이 1개면 단일, 여러 개면 복합입니다. **앱이 `smallRoutines` 배열 길이로 판단하세요.** 서버는 `routineType` 같은 필드를 주지 않습니다.
 - `WEEKLY` 는 기간 안에 해당 요일이 하루도 없으면 아무것도 만들지 않고 `createdCount: 0` 을 돌려줍니다. 오류가 아닙니다.
 
-**Error**: `ROUTINE_INVALID_TIME_RANGE`, `ROUTINE_INVALID_DATE_RANGE`, `ROUTINE_DATE_RANGE_TOO_LONG`, `ROUTINE_INVALID_REPEAT_RULE`(모드에 필요한 필드가 없거나 `repeatDays` 가 빈 배열), `ROUTINE_TOO_MANY_DATES`(`repeatDates` 13개 이상) — 모두 400
+**Error**: `ROUTINE_INVALID_TIME_RANGE`, `ROUTINE_INVALID_DATE_RANGE`, `ROUTINE_DATE_RANGE_TOO_LONG`, `ROUTINE_INVALID_REPEAT_RULE`(모드에 필요한 필드가 없거나 `repeatDays` 가 빈 배열), `ROUTINE_TOO_MANY_DATES`(`repeatDates` 13개 이상) — 모두 400. 그 밖에 `CHILD_NOT_FOUND` 404, `CHILD_FORBIDDEN` 403 (1-1-1)
 
 > 🔺 **`RANGE` 기간 길이 상한 미확정** (15장 #7). 상한이 없으면 한 번의 요청으로 몇 년치 행이 생길 수 있어 **설정값으로 빼 둡니다.** `DATES` 의 12개와는 **별개 값**입니다.
 
@@ -788,6 +801,8 @@
 - ⚠️ **앱이 들고 있는 값은 시간이 지나면 실제와 어긋납니다.** 아이가 기기에서 루틴을 완료해도 앱은 알지 못합니다. 앱은 화면에 다시 들어올 때 이 API 를 다시 부르세요.
 - 🔺 `from`~`to` 최대 범위 상한 미확정 (15장 #7). 31일을 제안합니다. 상세까지 담으므로 응답이 커집니다.
 
+**Error**: `CHILD_NOT_FOUND` 404, `CHILD_FORBIDDEN` 403 (1-1-1)
+
 ### PATCH /big-routines/:bigRoutineId — 빅루틴 수정
 
 **Request**: `title`, `startTime`, `endTime` (모두 선택, 최소 1개)
@@ -798,6 +813,10 @@
 
 - **기본이 `series` 입니다.** 반복으로 만든 루틴은 사용자 눈에 하나이므로, 월요일만 바뀌고 수 · 금이 그대로면 이상합니다. 삭제(`scope` 기본 `single`)와 기본값이 반대인 것은 의도한 것입니다. **수정은 되돌릴 수 있지만 삭제는 어렵기 때문입니다.**
 - ⚠️ **오늘보다 이전 날짜의 행은 바꾸지 않습니다.** `scope=series` 여도 그렇습니다. 지난 기록은 그때 실제로 무엇을 하기로 했었는지를 담고 있어야 합니다. 여기서 "오늘" 은 **KST 기준 오늘 날짜**입니다(1-3).
+
+**Error**: `BIG_ROUTINE_NOT_FOUND` 404, `CHILD_FORBIDDEN` 403
+
+- 경로에 `:childId` 가 없어도 소유권 검사를 합니다. 빅루틴에서 자녀를 거슬러 올라가 그 자녀가 내 자녀인지 봅니다. 이 검사가 없으면 `bigRoutineId` 를 1, 2, 3 으로 바꿔가며 **남의 아이 루틴을 전부 고칠 수 있습니다.**
 
 ### DELETE /big-routines/:bigRoutineId — 빅루틴 삭제
 
@@ -913,6 +932,8 @@
 - **반복 관련 필드가 없습니다.** 반복은 빅루틴을 만들 때 정합니다(9장 `repeatType`).
 - 응답에 `isActive` 가 없습니다. 컬럼이 삭제되었습니다.
 
+**Error**: `CHILD_NOT_FOUND` 404, `CHILD_FORBIDDEN` 403 (1-1-1)
+
 ### GET /children/:childId/routine-templates — 양식 목록
 
 삭제되지 않은(`deleted_at is null`) 양식을 반환합니다.
@@ -934,6 +955,8 @@
 **Response 204**
 
 - soft delete (`deleted_at` 채움). 이 양식으로 이미 만들어 둔 빅루틴은 **그대로 남습니다.**
+
+**Error**: `ROUTINE_TEMPLATE_NOT_FOUND` 404, `CHILD_FORBIDDEN` 403 — `:templateId` 만 받는 엔드포인트도 양식에서 자녀를 거슬러 올라가 검사합니다.
 
 ---
 
