@@ -183,6 +183,38 @@ class SchemaMigrationIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("페어링 중인 기기는 device_uid 없이 저장할 수 있다")
+	void deviceUidIsNullUntilClaim() {
+		long childId = insertChildOfNewUser("pending-device@example.com");
+
+		// 페어링은 두 단계다. 앱이 코드만 들어 있는 PENDING 행을 먼저 만들고,
+		// 기기가 claim 할 때 device_uid 를 가져온다. not null 이면 첫 단계에서
+		// 막혀 페어링 자체가 불가능해진다.
+		assertThatCode(() -> jdbcTemplate.update(
+			"insert into devices (child_id, pairing_code, status) values (?, ?, 'PENDING')",
+			childId, "0123456789"))
+			.doesNotThrowAnyException();
+	}
+
+	@Test
+	@DisplayName("device_uid 가 비어 있는 기기가 여러 대 있어도 충돌하지 않는다")
+	void multiplePendingDevicesWithoutUidDoNotCollide() {
+		long childId = insertChildOfNewUser("many-pending@example.com");
+
+		jdbcTemplate.update(
+			"insert into devices (child_id, pairing_code, status) values (?, ?, 'PENDING')",
+			childId, "1111111111");
+
+		// 자녀당 기기가 여러 대라 PENDING 행이 동시에 여럿일 수 있다.
+		// PostgreSQL 의 유니크 인덱스는 NULL 을 서로 다른 값으로 보므로
+		// device_uid 가 비어 있는 행끼리는 충돌하지 않는다.
+		assertThatCode(() -> jdbcTemplate.update(
+			"insert into devices (child_id, pairing_code, status) values (?, ?, 'PENDING')",
+			childId, "2222222222"))
+			.doesNotThrowAnyException();
+	}
+
+	@Test
 	@DisplayName("삭제된 컬럼들이 실제로 사라졌다")
 	void removedColumnsAreGone() {
 		// 문서에서만 지우고 DB 에 남겨두면 엔티티를 만들 때 ddl-auto=validate 가
