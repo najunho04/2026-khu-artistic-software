@@ -35,7 +35,7 @@
 8. [디바이스 API (기기용)](#8-디바이스-api-기기용)
 9. [루틴](#9-루틴)
 10. [루틴 템플릿 (저장해둔 양식)](#10-루틴-템플릿-저장해둔-양식)
-11. [대시보드](#11-대시보드)
+11. [대시보드 · 통계](#11-대시보드--통계)
 12. [캐릭터](#12-캐릭터)
 13. [커뮤니티](#13-커뮤니티)
 14. [온보딩 & 페어링 호출 순서](#14-온보딩--페어링-호출-순서)
@@ -989,46 +989,41 @@
 
 ---
 
-## 11. 대시보드
+## 11. 대시보드 · 통계
 
-### GET /children/:childId/dashboard — 대시보드 조회
+> ✅ **확정 (2026-09-09) — 통계는 하루 · 일주일 · 한달 세 구간만 봅니다.** 자유 기간(`from`~`to`) 조회는 없애고 `period` 하나로 고릅니다. 화면에 필요한 것이 그 셋뿐이고, 자유 기간을 열어두면 "이번 주가 언제부터인가" 를 앱이 정하게 되어 화면마다 달라집니다.
 
-내 기기 메인창. 이번주·어제 이행률, 기기 상태, 인사이트를 통합 조회합니다.
+### 11-1. 집계 규칙 (공통)
 
-**Response 200**
+세 엔드포인트가 모두 같은 규칙으로 셉니다. 집계 테이블은 두지 않고 `SMALL_ROUTINES` 를 그때그때 셉니다.
 
-```json
-{
-  "success": true,
-  "data": {
-    "childId": 10,
-    "childName": "김아이",
-    "thisWeek": { "completionRate": 82.5, "doneCount": 33, "totalCount": 40 },
-    "yesterday": { "completionRate": 75.0, "doneCount": 6, "totalCount": 8 },
-    "devices": [
-      {
-        "deviceId": 55,
-        "nickname": "아이 시계",
-        "battery": 78,
-        "status": "ACTIVE",
-        "lastSyncedAt": "2026-09-01T07:55:00Z"
-      }
-    ],
-    "insights": [
-      { "type": "LOW_MISSION_RATE", "message": "양치하기 미션 이행률이 낮아요.", "seriesId": "3a7b..." }
-    ]
-  },
-  "error": null
-}
+```
+N (totalCount) = 그 기간에 있는 할 일 수
+n (doneCount)  = 그중 status = 'DONE' 인 수
+completionRate = n / N * 100  (소수 첫째 자리까지)
 ```
 
-> 🔴 **Breaking change.** `battery` 단일 필드가 `devices` 배열로 바뀝니다. 기기가 여러 대일 때 단일 battery 값이 어느 기기 것인지 표현할 수 없기 때문입니다. **앱과 동시 배포가 필요합니다.**
+**지운 할 일은 분모에서 뺍니다** (2026-09-09 확정). `deleted_at is null` 조건을 겁니다.
 
-- 🔺 `insights` 구조는 추론. 인사이트 종류와 생성 규칙이 정해지지 않았습니다. 우선 `LOW_MISSION_RATE` 하나만 두고 `type`으로 확장하는 형태를 제안합니다.
+> 이것이 왜 중요한가 — 월요일에 할 일 4개 중 2개를 했고, 화요일에 보호자가 안 하던 할 일 1개를 지웠다고 합시다. 분모에 넣으면 `2/4 = 50%`, 빼면 `2/3 = 67%` 입니다. **둘 다 말이 되지만 하나를 골라야 하고, 여기서 틀리면 모든 통계 숫자가 조용히 틀립니다.**
+>
+> 빼는 쪽을 고른 이유는 두 가지입니다. 지운 할 일이 계속 이행률을 깎으면 보호자가 "왜 점수가 안 오르지" 하게 되고, 다른 모든 조회가 `deleted_at is null` 을 거는 것과도 어긋납니다.
+
+**할 일이 하나도 없는 기간의 이행률은 0 입니다.** 0 으로 나눌 수 없고, 100 으로 두면 아무것도 안 한 기간이 만점으로 보여 통계가 부풀려집니다.
+
+**기간의 경계는 KST 기준입니다**(1-3). 서버는 UTC 로 돌지만 "오늘" 은 사용자가 사는 곳의 오늘이어야 합니다.
+
+| period | 뜻 | 범위 |
+|---|---|---|
+| `DAY` | 오늘 | 오늘 하루 |
+| `WEEK` | 최근 7일 | 오늘 포함 7일 |
+| `MONTH` | 최근 30일 | 오늘 포함 30일 |
+
+> 🔺 **달력 기준이 아니라 "최근 N일" 입니다.** 달력 주(월요일 시작)로 하면 월요일 아침에 이행률이 0% 로 보여 사용자가 실패한 것처럼 느낍니다. 또 "주의 시작이 월요일인가 일요일인가" 를 정해야 하는데, 최근 7일로 두면 그 논쟁 자체가 없어집니다. 달력 기준이 필요하면 이 표만 고치면 됩니다.
 
 ### GET /children/:childId/stats — 기간별 이행률
 
-**Query**: `from` (date, Y), `to` (date, Y)
+**Query**: `period` (enum, Y) — `DAY` \| `WEEK` \| `MONTH`
 
 **Response 200**
 
@@ -1036,24 +1031,26 @@
 {
   "success": true,
   "data": {
-    "from": "2026-08-01",
-    "to": "2026-08-31",
-    "summary": { "completionRate": 78.3, "doneCount": 188, "totalCount": 240 },
-    "daily": [
-      { "date": "2026-08-01", "completionRate": 87.5, "doneCount": 7, "totalCount": 8 }
-    ]
+    "period": "WEEK",
+    "from": "2026-08-26",
+    "to": "2026-09-01",
+    "doneCount": 33,
+    "totalCount": 40,
+    "completionRate": 82.5
   },
   "error": null
 }
 ```
 
-- 집계 테이블 없이 `small_routines`를 직접 집계합니다. 🔺 조회 기간 상한 최대 90일을 제안합니다.
+- `from` · `to` 를 함께 돌려주는 이유는 앱이 "8/26 ~ 9/1" 처럼 기간을 화면에 쓸 수 있게 하기 위해서입니다. 앱이 다시 계산하면 서버와 하루가 어긋날 수 있습니다.
+
+**Error**: `INVALID_INPUT` 400 (`period` 가 셋 중 하나가 아님), `CHILD_NOT_FOUND` 404, `CHILD_FORBIDDEN` 403
 
 ### GET /children/:childId/stats/missions — 미션별 이행률
 
-`series_id` 기준으로 묶은 미션별 이행률. "OO 미션 이행률이 낮아요" 인사이트 생성용입니다.
+`series_id` 기준으로 묶은 미션별 이행률입니다.
 
-**Query**: `from` (date, Y), `to` (date, Y)
+**Query**: `period` (enum, Y) — `DAY` \| `WEEK` \| `MONTH`
 
 **Response 200**
 
@@ -1064,16 +1061,59 @@
     {
       "seriesId": "3a7b...",
       "title": "양치하기",
-      "completionRate": 42.9,
       "doneCount": 9,
-      "totalCount": 21
+      "totalCount": 21,
+      "completionRate": 42.9
     }
   ],
   "error": null
 }
 ```
 
-- 이름이 바뀐 미션은 `series_id`가 유지되므로 같은 행으로 집계됩니다. `title`은 **가장 최근 값**을 씁니다.
+- 이름이 바뀐 미션은 `series_id` 가 유지되므로 **같은 행으로 집계**됩니다. `title` 은 **가장 최근 값**을 씁니다. 이름을 고쳤다고 통계가 두 갈래로 갈라지면 "양치하기 미션을 얼마나 하고 있나" 를 알 수 없게 됩니다.
+- **이행률이 낮은 순으로 정렬**합니다. 보호자가 보려는 것이 "무엇이 잘 안 되고 있나" 이기 때문입니다.
+
+**Error**: `INVALID_INPUT` 400, `CHILD_NOT_FOUND` 404, `CHILD_FORBIDDEN` 403
+
+### GET /children/:childId/dashboard — 대시보드 조회
+
+앱 메인 화면. **세 구간 이행률과 기기 상태를 한 번에** 가져옵니다.
+
+**Response 200**
+
+```json
+{
+  "success": true,
+  "data": {
+    "childId": 10,
+    "childName": "김아이",
+    "insights": {
+      "day":   { "from": "2026-09-01", "to": "2026-09-01", "doneCount": 6,  "totalCount": 8,  "completionRate": 75.0 },
+      "week":  { "from": "2026-08-26", "to": "2026-09-01", "doneCount": 33, "totalCount": 40, "completionRate": 82.5 },
+      "month": { "from": "2026-08-03", "to": "2026-09-01", "doneCount": 120, "totalCount": 160, "completionRate": 75.0 }
+    },
+    "devices": [
+      {
+        "deviceId": 55,
+        "nickname": "아이 시계",
+        "status": "ACTIVE",
+        "battery": 78,
+        "lastSyncedAt": "2026-09-01T07:55:00Z"
+      }
+    ]
+  },
+  "error": null
+}
+```
+
+> ✅ **`insights` 재정의 (2026-09-09).** 이전에는 `LOW_MISSION_RATE` 같은 **문구형 인사이트**를 담을 자리였고, 종류와 생성 규칙이 미확정이라 Phase 5 전체를 막고 있었습니다. 이제 **하루 · 일주일 · 한달 이행률 세 개**를 담습니다. 이것으로 15장 #9 가 해소됐습니다.
+
+> 🔴 **Breaking change.** `battery` 단일 필드가 `devices` 배열로 바뀝니다. 기기가 여러 대일 때 단일 값이 어느 기기 것인지 표현할 수 없기 때문입니다. **앱과 동시 배포가 필요합니다.**
+
+- 이 엔드포인트는 **새로 계산하는 것이 없습니다.** `stats` 세 번과 기기 목록을 합친 것입니다. 그런데도 따로 두는 이유는 앱이 메인 화면 하나를 그리려고 네 번 왕복하면 화면이 순차적으로 그려져 로딩이 눈에 띄기 때문입니다.
+- `devices` 는 페어링만 하고 아직 sync 하지 않은 기기의 `battery` · `lastSyncedAt` 을 **`null` 그대로** 내보냅니다. 0 으로 채우면 "배터리 없음" 과 "아직 모름" 을 구분할 수 없습니다.
+
+**Error**: `CHILD_NOT_FOUND` 404, `CHILD_FORBIDDEN` 403
 
 ---
 
@@ -1331,9 +1371,8 @@
 | 4 | 회원 탈퇴 시 cascade 정책 | `DELETE /users/me` 구현 자체 | Phase 2 |
 | 5 | 페어링 폴링 **주기** (몇 초마다 호출할지) | 앱·서버 합의 사항. **타임아웃은 10분으로 확정** | Phase 2 |
 | 6 | 만료 PENDING 행 **정리 배치 주기** | 페어링 정리 | Phase 2 |
-| 7 | 조회 기간 상한 — calendar `from`~`to`(31일 제안), `RANGE` 반복 기간 길이, stats(90일 제안) | 루틴·대시보드 | Phase 3 |
+| 7 | 조회 기간 상한 — calendar `from`~`to`(31일 제안), `RANGE` 반복 기간 길이 | 루틴 | Phase 3 |
 | 8 | sync 부분 실패 처리, `dates` 최대 길이 | 디바이스 sync | Phase 4 |
-| 9 | 인사이트 종류와 생성 규칙 | 대시보드 | Phase 5 |
 | 10 | 캐릭터 획득 시나리오, `rarity`/`weight` 사용 여부 (진화 규칙은 int 고정으로 확정) | 캐릭터 API | 회의 |
 
 ### 종료된 항목
@@ -1342,6 +1381,9 @@
 
 | 항목 | 결정 |
 |---|---|
+| **통계 기간** | ✅ **하루 · 일주일 · 한달 세 구간만.** 자유 기간 조회 없음. 달력이 아니라 "최근 N일" (2026-09-09) |
+| **인사이트 종류와 생성 규칙** | ✅ **소멸.** 문구형 인사이트 대신 세 구간 이행률을 담기로 해 정할 대상이 없어짐 (2026-09-09) |
+| **이행률 분모에 지운 할 일 포함 여부** | ✅ **뺀다** (`deleted_at is null`). 지운 할 일이 계속 이행률을 깎으면 안 됨 (2026-09-09) |
 | **`pairingCode` 자릿수 · 문자 구성** | ✅ **숫자 10자리**(`0000000000` ~ `9999999999`, 앞자리 0 유지). 100억 조합 (2026-09-09) |
 | **기기 API envelope** | ✅ **앱과 동일한 공통 envelope 적용.** 인증 실패 코드만 `DEVICE_UNAUTHORIZED` 로 구분 (2026-09-09) |
 | **로깅에서 가릴 항목** | ✅ **확정 (2026-09-09).** UUID 계열(`accessUuid`·`deviceAccessUuid`)은 **앞뒤 3글자만 남기고** 가운데를 가림. `password`·`pairingCode` 는 **통째로 가림** |
