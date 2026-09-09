@@ -5,9 +5,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * 모든 컨트롤러에서 터진 예외를 "API.md" 2-2 실패 포맷으로 바꿔 내보낸다.
@@ -16,8 +19,13 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * 만들면 같은 오류가 API 마다 다른 모양으로 나가기 때문이다. 앱은 code 로
  * 분기하므로 그 형태가 흔들리면 앱의 화면 분기가 통째로 어긋난다.
  *
- * 핸들러는 세 개다. 우리가 의도적으로 던진 업무 예외, 요청 검증 실패,
- * 그리고 나머지 전부다.
+ * 핸들러는 다섯 개다. 우리가 의도적으로 던진 업무 예외, 요청 검증 실패,
+ * 없는 경로, 허용되지 않은 메서드, 그리고 나머지 전부다.
+ *
+ * 없는 경로와 메서드 불일치를 따로 잡는 이유는, 그러지 않으면 맨 아래의
+ * "나머지 전부" 핸들러가 그것들까지 삼켜 500 으로 내보내기 때문이다.
+ * 경로 오타 하나가 "서버가 고장났다" 로 보이면 장애 신고가 들어온다.
+ * "API.md" 3-1 이 두 경우를 각각 NOT_FOUND 와 METHOD_NOT_ALLOWED 로 정의해 두었다.
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -58,6 +66,40 @@ public class GlobalExceptionHandler {
 
 		return ResponseEntity.status(ErrorCode.INVALID_INPUT.getHttpStatus())
 			.body(ApiResponse.failure(ErrorCode.INVALID_INPUT, details));
+	}
+
+	/**
+	 * 요청한 경로에 해당하는 것이 없을 때를 처리한다.
+	 *
+	 * 두 예외를 함께 잡는 이유는 스프링이 상황에 따라 다른 것을 던지기 때문이다.
+	 * 정적 자원까지 뒤진 뒤 없으면 NoResourceFoundException 이,
+	 * 핸들러 탐색 단계에서 없으면 NoHandlerFoundException 이 나온다.
+	 * 밖에서 보면 둘 다 "그런 주소는 없다" 는 같은 뜻이다.
+	 */
+	@ExceptionHandler({NoResourceFoundException.class, NoHandlerFoundException.class})
+	public ResponseEntity<ApiResponse<Void>> handleNotFound(Exception exception) {
+		// 흔히 일어나는 일이라 스택 트레이스는 남기지 않는다.
+		logger.warn("존재하지 않는 경로 요청: {}", exception.getMessage());
+
+		return ResponseEntity.status(ErrorCode.NOT_FOUND.getHttpStatus())
+			.body(ApiResponse.failure(ErrorCode.NOT_FOUND));
+	}
+
+	/**
+	 * 경로는 있지만 그 메서드는 받지 않는 경우를 처리한다.
+	 *
+	 * 404 와 나누는 이유는 앱 입장에서 고쳐야 할 것이 다르기 때문이다.
+	 * 404 는 주소가 틀린 것이고, 405 는 주소는 맞는데 GET 과 POST 를
+	 * 잘못 쓴 것이다.
+	 */
+	@ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+	public ResponseEntity<ApiResponse<Void>> handleMethodNotAllowed(
+		HttpRequestMethodNotSupportedException exception) {
+
+		logger.warn("허용되지 않은 메서드 요청: {}", exception.getMessage());
+
+		return ResponseEntity.status(ErrorCode.METHOD_NOT_ALLOWED.getHttpStatus())
+			.body(ApiResponse.failure(ErrorCode.METHOD_NOT_ALLOWED));
 	}
 
 	/**
