@@ -1,11 +1,24 @@
 # 예소 API 명세서
 
 > 출처: Notion `예소 개발자용 > API 기본 명세서` (엔드포인트 DB) + `API Req/Res 명세 초안`
-> 총 **48개** 엔드포인트 · 앱용 `/api/v1/**` 45개, 기기용 `/device-api/v1/**` 3개
-> — 2026-09-04 Notion 엔드포인트 DB 원본(48행)과 대조해 확인했습니다. 이전 표기 "46개(앱 43)"는 오기였습니다.
-> 커뮤니티 11개는 구현 제외이므로 **실제 구현 대상은 37개**입니다.
-> 최종 수정: 2026-09-04 — 날짜 동기화만 수행. **ROADMAP 의 테스트 환경(T-1 ~ T-5) 확정은 엔드포인트·req/res·에러코드에 영향 없음.**
-> (직전 수정: 2026-08-30)
+> 총 **46개** 엔드포인트 · 앱용 `/api/v1/**` 44개, 기기용 `/device-api/v1/**` 2개
+> 커뮤니티 11개는 구현 제외이므로 **실제 구현 대상은 35개**입니다.
+>
+> 최종 수정: 2026-09-09 — **로그인 방식 전환**(소셜 → 이메일·비밀번호, JWT 제거)과 **루틴 반복 구조 확정**(빅루틴 즉시 생성, 템플릿 재정의)을 반영했습니다.
+>
+> **엔드포인트 증감 (2026-09-04 대비 48개 → 46개)**
+>
+> | 변화 | 엔드포인트 | 이유 |
+> |---|---|---|
+> | ➖ | `POST /auth/social-login` | 이메일·비밀번호로 전환 |
+> | ➖ | `POST /auth/refresh` | 만료 없는 UUID 방식이라 재발급 대상 없음 |
+> | ➖ | `GET /children/:childId/routines` | 캘린더가 한 달치 상세를 통째로 반환 |
+> | ➖ | `POST /device-api/v1/token/refresh` | 기기 토큰 체계 삭제 |
+> | ➕ | `POST /auth/signup` | 회원가입 |
+> | ➕ | `POST /auth/login` | 로그인 |
+>
+> **문서 동기화**: `ERD.md`(`USERS`·`DEVICES`·`ROUTINE_TEMPLATES`·`BIG_ROUTINES` 컬럼, 4장 제약조건), `ROADMAP.md`(Phase 범위·블로커) 모두 **영향 있음**이며 같은 날짜로 함께 갱신했습니다.
+> (직전 수정: 2026-09-04 — 날짜 동기화. 그 전: 2026-08-30)
 
 > [!WARNING]
 > **req/res 스키마는 초안입니다.** 엔드포인트 DB에는 `param` 컬럼(필드 이름 나열)까지만 존재하고, 각 엔드포인트 페이지의 Request/Response 템플릿은 비어 있습니다. 아래 스키마는 ERD 컬럼 타입과 `설명`·`기타` 컬럼에서 역산한 것으로, 팀 검토 후 확정해야 합니다. 추론 비중이 큰 항목은 🔺로 표시했습니다.
@@ -21,7 +34,7 @@
 7. [기기 (앱용)](#7-기기-앱용)
 8. [디바이스 API (기기용)](#8-디바이스-api-기기용)
 9. [루틴](#9-루틴)
-10. [고정 루틴 템플릿](#10-고정-루틴-템플릿)
+10. [루틴 템플릿 (저장해둔 양식)](#10-루틴-템플릿-저장해둔-양식)
 11. [대시보드](#11-대시보드)
 12. [캐릭터](#12-캐릭터)
 13. [커뮤니티](#13-커뮤니티)
@@ -34,14 +47,18 @@
 
 ### 1-1. Base URL · 인증
 
+**JWT 를 쓰지 않습니다**(2026-09-09 확정). 앱도 기기도 서버가 발급한 임의의 UUID 하나를 헤더에 담아 보내고, 서버는 그 값으로 DB 를 조회해 누구인지 알아냅니다. 서명 검증도 만료 처리도 재발급도 없습니다.
+
 | 구분 | Base URL | 인증 방식 | 헤더 |
 |---|---|---|---|
-| 앱 (보호자) | `/api/v1` | JWT (access token) | `Authorization: Bearer ...` |
-| 기기 | `/device-api/v1` | opaque token (claim 시 발급, 시간 만료 없음) | `Authorization: Bearer ...` |
+| 앱 (보호자) | `/api/v1` | `USERS.access_uuid` (로그인 시 발급) | `X-Access-Uuid: <uuid>` |
+| 기기 | `/device-api/v1` | `DEVICES.device_access_uuid` (페어링 완료 시 발급) | `X-Device-Uuid: <uuid>` |
 
-인증 불필요 엔드포인트: `POST /auth/social-login`, `POST /auth/refresh`, `POST /device-api/v1/claim`, `POST /device-api/v1/token/refresh`
+인증 불필요 엔드포인트: `POST /auth/signup`, `POST /auth/login`, `POST /device-api/v1/claim`
 
-앱과 기기는 인증 방식이 완전히 달라 **SecurityFilterChain을 2개로 분리**해야 합니다. `/device-api/**`에는 JWT 필터가 걸리지 않아야 합니다.
+앱과 기기는 **읽는 헤더도 조회하는 테이블도 다르므로 SecurityFilterChain 을 2개로 분리**합니다. `/device-api/**` 에 앱용 필터가 걸리면 기기 요청이 유저를 찾다가 실패합니다.
+
+> **만료가 없다는 것의 뜻** — 한 번 발급한 `access_uuid` 는 로그아웃하거나 값을 새로 발급하기 전까지 계속 유효합니다. 값이 새어 나가면 되찾을 방법이 로그아웃뿐입니다. 공모전 범위에서 **알고 받아들인 선택**이며, 그 대가로 서명 알고리즘 · 키 관리 · 만료 · 재발급 정책이 전부 사라졌습니다.
 
 ### 1-2. 표기 규칙
 
@@ -158,20 +175,23 @@
 
 | code | HTTP | message | 발생 지점 |
 |---|---|---|---|
-| `AUTH_INVALID_PROVIDER` | 400 | 지원하지 않는 로그인 방식입니다. | social-login. 현재 `GOOGLE` 외 전부 |
-| `AUTH_INVALID_ID_TOKEN` | 401 | 소셜 로그인에 실패했습니다. | social-login |
-| `AUTH_TOKEN_EXPIRED` | 401 | 로그인이 만료되었습니다. 다시 로그인해 주세요. | 전 구간 |
-| `AUTH_REFRESH_TOKEN_INVALID` | 401 | 다시 로그인해 주세요. | refresh |
+| `AUTH_EMAIL_ALREADY_EXISTS` | 409 | 이미 가입된 이메일입니다. | signup |
+| `AUTH_INVALID_EMAIL_FORMAT` | 400 | 이메일 형식이 올바르지 않습니다. | signup |
+| `AUTH_INVALID_CREDENTIALS` | 401 | 이메일 또는 비밀번호가 올바르지 않습니다. | login |
 | `USER_NOT_FOUND` | 404 | 사용자를 찾을 수 없습니다. | users/me |
 | `USER_ALREADY_WITHDRAWN` | 409 | 이미 탈퇴한 계정입니다. | users/me |
 
+> **`AUTH_INVALID_CREDENTIALS` 는 이메일이 없을 때와 비밀번호가 틀릴 때 모두 같은 메시지를 씁니다.** 둘을 구분해 알려주면 "이 이메일은 가입되어 있다" 는 사실이 새어 나갑니다.
+
+> **헤더가 없거나 유효하지 않은 경우**는 3-1 의 공통 코드 `UNAUTHORIZED`(401, "로그인이 필요합니다.")를 씁니다. 인증 실패마다 새 코드를 만들면 같은 뜻의 코드가 둘이 되어 앱이 어느 쪽을 봐야 할지 모르게 됩니다.
+
 ### 3-3. 자녀
 
-| code | HTTP | message |
-|---|---|---|
-| `CHILD_NOT_FOUND` | 404 | 자녀를 찾을 수 없습니다. |
-| `CHILD_FORBIDDEN` | 403 | 해당 자녀에 대한 권한이 없습니다. |
-| `CHILD_LIMIT_EXCEEDED` | 409 | 등록 가능한 자녀 수를 초과했습니다. |
+| code | HTTP | message | 비고 |
+|---|---|---|---|
+| `CHILD_NOT_FOUND` | 404 | 자녀를 찾을 수 없습니다. | |
+| `CHILD_FORBIDDEN` | 403 | 해당 자녀에 대한 권한이 없습니다. | |
+| `CHILD_LIMIT_EXCEEDED` | 409 | 등록 가능한 자녀 수를 초과했습니다. | **보호자당 10명** (2026-09-04 확정) |
 
 ### 3-4. 기기 · 페어링
 
@@ -179,13 +199,12 @@
 |---|---|---|---|
 | `DEVICE_NOT_FOUND` | 404 | 기기를 찾을 수 없습니다. | |
 | `DEVICE_FORBIDDEN` | 403 | 해당 기기에 대한 권한이 없습니다. | |
-| `DEVICE_LIMIT_EXCEEDED` | 409 | 자녀당 등록 가능한 기기 수를 초과했습니다. | N기기 정책 확정 후 임계값 결정 |
+| `DEVICE_LIMIT_EXCEEDED` | 409 | 자녀당 등록 가능한 기기 수를 초과했습니다. | **자녀당 10대** (2026-09-04 확정) |
 | `PAIRING_CODE_NOT_FOUND` | 404 | 유효하지 않은 페어링 코드입니다. | claim |
 | `PAIRING_CODE_EXPIRED` | 410 | 페어링 코드가 만료되었습니다. | 발급 후 10분 |
 | `PAIRING_CODE_ALREADY_USED` | 409 | 이미 사용된 페어링 코드입니다. | 일회용 |
 | `DEVICE_UID_ALREADY_PAIRED` | 409 | 이미 다른 계정에 연결된 기기입니다. | `unique(device_uid)` 위반 |
-| `DEVICE_TOKEN_INVALID` | 401 | 기기 인증에 실패했습니다. | 기기 → token/refresh 유도 |
-| `DEVICE_SECRET_INVALID` | 401 | 기기 인증 정보가 올바르지 않습니다. | 재페어링 필요 |
+| `DEVICE_UNAUTHORIZED` | 401 | 기기 인증에 실패했습니다. | `X-Device-Uuid` 없음·불일치. **자체 복구 경로가 없어 재페어링 안내** |
 
 ### 3-5. 루틴
 
@@ -193,10 +212,12 @@
 |---|---|---|
 | `BIG_ROUTINE_NOT_FOUND` | 404 | 루틴을 찾을 수 없습니다. |
 | `SMALL_ROUTINE_NOT_FOUND` | 404 | 할 일을 찾을 수 없습니다. |
-| `ROUTINE_TEMPLATE_NOT_FOUND` | 404 | 고정 루틴을 찾을 수 없습니다. |
+| `ROUTINE_TEMPLATE_NOT_FOUND` | 404 | 저장해둔 루틴 양식을 찾을 수 없습니다. |
 | `ROUTINE_INVALID_TIME_RANGE` | 400 | 종료 시각이 시작 시각보다 빠를 수 없습니다. |
 | `ROUTINE_INVALID_DATE_RANGE` | 400 | 종료일이 시작일보다 빠를 수 없습니다. |
 | `ROUTINE_DATE_RANGE_TOO_LONG` | 400 | 한 번에 등록할 수 있는 기간을 초과했습니다. |
+| `ROUTINE_INVALID_REPEAT_RULE` | 400 | 반복 설정이 올바르지 않습니다. |
+| `ROUTINE_TOO_MANY_DATES` | 400 | 한 번에 지정할 수 있는 날짜 수를 초과했습니다. |
 | `ROUTINE_ORDER_MISMATCH` | 400 | 정렬 대상이 올바르지 않습니다. |
 
 ### 3-6. 커뮤니티 · 캐릭터
@@ -220,18 +241,41 @@
 
 ## 4. 인증
 
-### POST /auth/social-login — 소셜 로그인
+> ✅ **확정 (2026-09-09) — 이메일 · 비밀번호 로그인.** 소셜 로그인(`POST /auth/social-login`)과 토큰 재발급(`POST /auth/refresh`)은 **삭제**되었습니다. 공모전 일정에 맞춰 로그인을 최소로 줄인 결정입니다.
+>
+> ⚠️ **비밀번호 찾기와 이메일 인증은 구현하지 않습니다.** 메일을 보낼 수단이 로드맵에 없기 때문입니다. 이메일은 **형식만** 확인하고 실제로 도달하는 주소인지 확인하지 않습니다. 따라서 **비밀번호를 잊으면 스스로 계정을 되찾을 수 없습니다.**
 
-**구글** 소셜 로그인. 최초 로그인 시 회원가입 처리 후 JWT 발급.
-
-> ✅ **확정 (2026-09-04) — 소셜 로그인은 구글로 제한합니다.** 카카오는 구현 범위에서 제외됐습니다. `USERS.provider` 컬럼은 그대로 두어 향후 확장 여지를 남기고, 검증기를 갈아끼우는 인터페이스도 유지합니다. 카카오 검증기를 추가하면 그때 이 enum 에 값을 늘리면 됩니다.
+### POST /auth/signup — 회원가입
 
 **Request**
 
 | key | 타입 | 필수 | 설명 |
 |---|---|---|---|
-| provider | enum | Y | `GOOGLE` **만 지원**. 그 외 값은 `AUTH_INVALID_PROVIDER` |
-| idToken | string | Y | 소셜 SDK가 발급한 ID 토큰 |
+| email | string | Y | 형식 검사만 수행. 실제 발송·인증 없음 |
+| password | string | Y | 🔺 최소 길이·문자 조합 정책 미확정 (15장 #2) |
+
+**Response 201**
+
+```json
+{
+  "success": true,
+  "data": {
+    "accessUuid": "3f2b8c10-5d4e-4a91-b7c3-9e0f1a2b3c4d",
+    "user": { "userId": 1, "name": null, "email": "parent@example.com" }
+  },
+  "error": null
+}
+```
+
+- 가입과 동시에 로그인 상태가 됩니다. 가입 직후 다시 로그인시키는 화면은 필요 없습니다.
+- `name` 이 `null` 이면 앱은 온보딩 1차(보호자 성명 입력)로 분기합니다. 소셜 로그인 시절의 `isFirstLogin` 필드를 대신합니다. 가입과 로그인이 분리되어 "이번이 첫 로그인인가" 를 서버가 따로 알려줄 이유가 없어졌기 때문입니다.
+- 비밀번호는 **되돌릴 수 없는 형태로 바꿔** `USERS.password_hash` 에 저장합니다. 평문은 로그를 포함해 어디에도 남기지 않습니다.
+
+**Error**: `AUTH_INVALID_EMAIL_FORMAT` 400, `AUTH_EMAIL_ALREADY_EXISTS` 409
+
+### POST /auth/login — 로그인
+
+**Request**: `email` (string, Y), `password` (string, Y)
 
 **Response 200**
 
@@ -239,43 +283,25 @@
 {
   "success": true,
   "data": {
-    "accessToken": "eyJhbGciOi...",
-    "refreshToken": "eyJhbGciOi...",
-    "isFirstLogin": true,
-    "user": { "userId": 1, "name": null, "email": "parent@example.com" }
+    "accessUuid": "3f2b8c10-5d4e-4a91-b7c3-9e0f1a2b3c4d",
+    "user": { "userId": 1, "name": "김보호", "email": "parent@example.com" }
   },
   "error": null
 }
 ```
 
-- `isFirstLogin`이 true면 앱은 온보딩 1차(보호자 성명 입력)로 분기합니다.
-- 🔺 토큰 만료 시간 미정. access 30분 / refresh 14일 정도를 제안하나 팀 확정 필요.
+- 로그인할 때마다 `access_uuid` 를 **새로 발급하고 기존 값을 무효로 만듭니다.** 그래서 한 계정은 항상 한 기기에서만 로그인 상태입니다. 값을 여러 개 두려면 별도 테이블이 필요한데, 지금 범위에서는 컬럼 하나로 끝내는 편이 낫다고 판단했습니다.
+- 앱은 이 값을 저장해 두고 이후 모든 요청에 `X-Access-Uuid` 헤더로 담습니다.
 
-**Error**: `AUTH_INVALID_PROVIDER` 400, `AUTH_INVALID_ID_TOKEN` 401
-
-### POST /auth/refresh — 토큰 재발급
-
-**Request**: `refreshToken` (string, Y)
-
-**Response 200**
-
-```json
-{
-  "success": true,
-  "data": { "accessToken": "eyJhbGciOi...", "refreshToken": "eyJhbGciOi..." },
-  "error": null
-}
-```
-
-> ❓ **확정 필요**: refresh token rotation 여부. 재발급 시 refreshToken도 새로 주고 기존 것을 무효화할지, accessToken만 줄지.
-
-**Error**: `AUTH_REFRESH_TOKEN_INVALID` 401
+**Error**: `AUTH_INVALID_CREDENTIALS` 401 (이메일이 없을 때와 비밀번호가 틀릴 때 **같은 응답**)
 
 ### POST /auth/logout — 로그아웃
 
-리프레시 토큰 무효화. 바디 없음, Authorization 헤더로 식별.
+`USERS.access_uuid` 를 비웁니다. 바디 없음, `X-Access-Uuid` 헤더로 식별합니다.
 
 **Response 204**
+
+- 이 값이 비워지면 그 값을 들고 있던 요청은 전부 `UNAUTHORIZED` 를 받습니다. 만료가 없는 구조라 **로그아웃이 값을 무효로 만드는 유일한 수단**입니다.
 
 ---
 
@@ -327,9 +353,13 @@
 |---|---|---|---|
 | name | string | Y | 자녀 이름 |
 | birthDate | date | Y | yyyy-MM-dd. 미래 날짜 불가 |
-| relationship | enum | Y | enum으로 고정 (값 목록은 회의에서 확정 예정) |
+| relationship | enum | Y | `PARENT`(부모) · `ADMIN`(관리자) **2개만** |
 
-> ✅ **확정 — enum 사용.** `relationship`은 **enum으로 고정**합니다(ERD 5-3). 다만 **구체적인 enum 값 목록은 회의에서 확정 예정**이므로, 예시(MOTHER / FATHER / GRANDPARENT / TEACHER / ETC 등)는 잠정값입니다. 값 확정 후 이 표와 아래 예시를 갱신해야 합니다.
+> ✅ **확정 (2026-09-04) — `relationship` 값 목록.** `PARENT`(부모)와 `ADMIN`(관리자) **두 개로 제한**합니다.
+>
+> 한국어 "부모"·"관리자"를 코드값으로 옮긴 것입니다. 다른 표기를 원하시면 이 표와 아래 예시, 그리고 코드의 열거형을 함께 고치면 됩니다.
+>
+> 이 값은 **임시로 정한 것**입니다. 타겟이 "일반학교 특수학급"으로 확장되면 교사 관련 값이 필요해질 수 있습니다(ERD 7장). 그때는 값을 늘리면 되고 이미 저장된 데이터는 그대로 둘 수 있습니다.
 
 **Response 201**
 
@@ -340,7 +370,7 @@
     "childId": 10,
     "name": "김아이",
     "birthDate": "2018-03-02",
-    "relationship": "MOTHER",
+    "relationship": "PARENT",
     "createdAt": "2026-09-01T08:30:00Z"
   },
   "error": null
@@ -359,7 +389,7 @@
       "childId": 10,
       "name": "김아이",
       "birthDate": "2018-03-02",
-      "relationship": "MOTHER",
+      "relationship": "PARENT",
       "deviceCount": 2
     }
   ],
@@ -380,7 +410,7 @@
     "childId": 10,
     "name": "김아이",
     "birthDate": "2018-03-02",
-    "relationship": "MOTHER",
+    "relationship": "PARENT",
     "createdAt": "2026-09-01T08:30:00Z"
   },
   "error": null
@@ -518,7 +548,9 @@
 
 ## 8. 디바이스 API (기기용)
 
-> ⚠️ 이 구간은 앱과 인증 방식이 완전히 다릅니다. SecurityFilterChain을 분리해 `/device-api/**`에는 JWT 필터가 걸리지 않도록 해야 합니다.
+> ⚠️ 이 구간은 앱과 인증 방식이 다릅니다. 기기는 `X-Device-Uuid` 헤더에 `DEVICES.device_access_uuid` 를 담습니다. SecurityFilterChain 을 분리해 `/device-api/**` 에 앱용 필터가 걸리지 않게 해야 합니다. 앱용 필터가 걸리면 기기 요청이 `USERS` 에서 유저를 찾다가 실패합니다.
+
+> ✅ **확정 (2026-09-09)** — 기기 토큰 체계를 없앴습니다. `POST /device-api/v1/token/refresh` 는 **삭제**되었고 `token` · `secret` 도 사라졌습니다. 페어링이 끝나면 서버가 발급하는 `deviceAccessUuid` 하나만 씁니다.
 
 ### POST /device-api/v1/claim — 기기 등록
 
@@ -539,8 +571,7 @@
   "success": true,
   "data": {
     "deviceId": 55,
-    "token": "dev_a1b2c3d4...",
-    "secret": "sec_e5f6g7h8...",
+    "deviceAccessUuid": "7c9e4d21-8b3a-4f60-a1d5-2e8c0b7f3a94",
     "serverTime": "2026-09-01T08:35:12Z"
   },
   "error": null
@@ -551,35 +582,20 @@
 
 1. `pairingCode`로 `status = 'PENDING'`인 행 조회 (`unique(pairing_code) where status = 'PENDING'` 덕분에 단일 행 특정)
 2. 만료 시각 검증 (발급 후 10분)
-3. `device_uid`, `token_hash`, `secret_hash`, `paired_at` 채우고 `status = 'ACTIVE'`
-4. `pairing_code`를 NULL 처리 (일회용)
-5. 평문 `token`, `secret` 반환 — **이 응답이 평문을 볼 수 있는 유일한 시점입니다.** 기기가 반드시 영속 저장해야 합니다.
+3. `device_uid`, `paired_at` 채우고 `status = 'ACTIVE'`
+4. **서버가 `device_access_uuid` 를 새로 만들어** 저장 (기기가 만든 값을 쓰지 않는 이유는 ERD 설계 노트 참고)
+5. `pairing_code` 를 NULL 처리 (일회용)
+6. `deviceAccessUuid` 반환 — **기기가 반드시 영속 저장해야 합니다.** 잃어버리면 되찾을 경로가 없어 재페어링뿐입니다.
 
 - 🔺 `serverTime`은 추론 항목. claim 직후 RTC를 맞춰두면 첫 sync 전까지의 시각 오차를 줄일 수 있어 추가했습니다.
 
 **Error**: `PAIRING_CODE_NOT_FOUND` 404, `PAIRING_CODE_EXPIRED` 410, `PAIRING_CODE_ALREADY_USED` 409, `DEVICE_UID_ALREADY_PAIRED` 409
 
-### POST /device-api/v1/token/refresh — 기기 토큰 재발급
+### ~~POST /device-api/v1/token/refresh~~ — ❌ 삭제 (2026-09-09)
 
-재페어링 없이 기기가 자체 복구하는 유일한 경로입니다. **인증 헤더 없음** (secret이 인증 수단).
+기기 토큰 체계를 없애면서 재발급할 대상이 사라졌습니다. `secret` 도 함께 없어졌습니다.
 
-**Request**: `deviceUid` (string, Y), `secret` (string, Y)
-
-**Response 200**
-
-```json
-{
-  "success": true,
-  "data": { "token": "dev_newtoken...", "serverTime": "2026-09-01T08:35:12Z" },
-  "error": null
-}
-```
-
-- 토큰은 시간 만료가 없습니다. 유출·사고 시 재발급용입니다.
-- 재발급 시 `token_hash`를 덮어써 기존 토큰이 자동 무효화됩니다.
-- 🔺 `secret` 회전 여부 미정. 회전시키면 보안상 낫지만 기기가 새 secret 저장에 실패하면 복구 불능이 됩니다. **회전하지 않는 쪽을 권장합니다.**
-
-**Error**: `DEVICE_SECRET_INVALID` 401, `DEVICE_NOT_FOUND` 404
+**대신 `deviceAccessUuid` 를 잃어버리면 재페어링해야 합니다.** 재페어링 없이 복구하는 경로가 사라진 것이 이 결정의 대가입니다. 기기가 이 값을 지우지 않는 저장소에 넣는 것이 그만큼 중요해졌습니다.
 
 ### POST /device-api/v1/sync — 기기 동기화 (push + pull)
 
@@ -639,20 +655,22 @@
 **구현 포인트**
 
 - 응답 `serverTime`으로 기기 RTC를 보정합니다.
-- **고정 루틴 지연 생성 트리거 지점.** `dates`에 담긴 날짜에 템플릿 기반 빅루틴이 없으면 이 시점에 생성합니다.
+- **이 엔드포인트는 루틴을 만들지 않습니다.** 있는 것만 읽어 갑니다. 기기에서는 루틴 생성이 불가능하고, 빅루틴은 앱이 요청할 때 즉시 만들어지기 때문입니다(9장).
 - UPDATE 기반이라 **멱등성이 보장**됩니다. 네트워크 실패로 기기가 같은 `completions`를 재전송해도 안전합니다.
 - 🔺 `accepted` 카운트와 부분 실패 처리 방식은 추론. 일부 `smallRoutineId`가 이미 삭제된 경우 전체를 실패시킬지 무시할지 정해야 합니다. **무시하고 넘어가는 쪽을 권장** — 기기는 재시도 외에 할 수 있는 일이 없습니다.
 - 🔺 `dates` 배열 최대 길이 제한 필요. 3일을 제안합니다.
 
-**Error**: `DEVICE_TOKEN_INVALID` 401 (기기는 이 코드를 받으면 `token/refresh`로 자체 복구를 시도해야 합니다)
+**Error**: `DEVICE_UNAUTHORIZED` 401 (`X-Device-Uuid` 가 없거나 유효하지 않음. 자체 복구 경로가 없으므로 기기는 재페어링을 안내해야 합니다)
 
 ---
 
 ## 9. 루틴
 
+> ✅ **확정 (2026-09-09)** — 반복 생성은 **빅루틴이 직접** 처리하고 **전부 즉시 만듭니다.** 조회 시점에 만들어내던 "지연 생성" 은 없어졌습니다(ERD 5-1). 템플릿은 반복과 무관한 **저장해둔 양식**으로 역할이 바뀌었습니다(10장).
+
 ### POST /children/:childId/big-routines — 빅루틴 생성
 
-단일 날짜 또는 기간 배치 생성. 기간 지정 시 날짜별 행을 각각 만들고 **동일 `series_id`를 부여**합니다.
+반복 모드에 따라 날짜 목록을 펼쳐 **날짜별 행을 즉시 만들고, 전부 같은 `series_id` 를 부여**합니다.
 
 **Request**
 
@@ -660,18 +678,34 @@
 |---|---|---|---|
 | title | string | Y | 빅루틴 제목 |
 | startTime | time | Y | HH:mm |
-| endTime | time | Y | HH:mm. startTime보다 뒤여야 함 |
-| startDate | date | Y | 시작일 |
-| endDate | date | N | 미지정 시 startDate 하루만 생성 |
+| endTime | time | Y | HH:mm. startTime 보다 뒤여야 함 |
+| repeatType | enum | Y | `RANGE` \| `WEEKLY` \| `DATES`. **셋 중 하나만** |
+| startDate | date | 조건부 | `RANGE` · `WEEKLY` 필수 |
+| endDate | date | 조건부 | `RANGE` · `WEEKLY` 필수 |
+| repeatDays | array | 조건부 | `WEEKLY` 필수. `MON`~`SUN` |
+| repeatDates | array | 조건부 | `DATES` 필수. **최대 12개** |
 | smallRoutines | array | N | 내부 할 일 목록 |
+| templateId | number | N | 저장해둔 양식에서 꺼내 만들 때. 값이 복사될 뿐 이후 연결은 남지 않음 |
+
+**반복 모드 세 가지** — 서로 배타적입니다. 하나만 고릅니다.
+
+| repeatType | 뜻 | 필요한 필드 |
+|---|---|---|
+| `RANGE` | 기간 안의 매일 | `startDate`, `endDate` |
+| `WEEKLY` | 기간 안에서 지정한 요일마다 | `startDate`, `endDate`, `repeatDays` |
+| `DATES` | 지정한 날짜들만 | `repeatDates` |
+
+**하루짜리 루틴**은 `RANGE` 에 `startDate` 와 `endDate` 를 같은 날로 주면 됩니다. 별도 모드를 두지 않았습니다.
 
 ```json
 {
   "title": "아침 준비",
   "startTime": "07:30",
   "endTime": "08:30",
+  "repeatType": "WEEKLY",
   "startDate": "2026-09-01",
-  "endDate": "2026-09-07",
+  "endDate": "2026-09-30",
+  "repeatDays": ["MON", "WED", "FRI"],
   "smallRoutines": [
     { "title": "세수하기", "order": 1 },
     { "title": "양치하기", "order": 2 }
@@ -686,63 +720,24 @@
   "success": true,
   "data": {
     "seriesId": "9f1c2e40-...",
-    "createdDates": ["2026-09-01", "2026-09-02", "2026-09-03"],
-    "createdCount": 3
+    "createdDates": ["2026-09-02", "2026-09-04", "2026-09-07"],
+    "createdCount": 13
   },
   "error": null
 }
 ```
 
-- `seriesId`, `createdDates` 반환은 명세에 명시된 항목입니다.
-- 날짜 범위로 만든 루틴은 **템플릿을 생성하지 않습니다.** 고정 반복이 필요하면 `routine-templates`를 씁니다.
+- **반복 모드는 저장되지 않습니다.** 날짜를 펼치는 데에만 쓰이고, 행이 만들어진 뒤에는 `series_id` 로 묶여 있다는 사실만 남습니다. 그래서 `BIG_ROUTINES` 에 반복 관련 컬럼이 하나도 없습니다.
+- **단일 루틴과 복합 루틴을 서버는 구분하지 않습니다.** 스몰루틴이 1개면 단일, 여러 개면 복합입니다. **앱이 `smallRoutines` 배열 길이로 판단하세요.** 서버는 `routineType` 같은 필드를 주지 않습니다.
+- `WEEKLY` 는 기간 안에 해당 요일이 하루도 없으면 아무것도 만들지 않고 `createdCount: 0` 을 돌려줍니다. 오류가 아닙니다.
 
-**Error**: `ROUTINE_INVALID_TIME_RANGE`, `ROUTINE_INVALID_DATE_RANGE`, `ROUTINE_DATE_RANGE_TOO_LONG` (모두 400)
+**Error**: `ROUTINE_INVALID_TIME_RANGE`, `ROUTINE_INVALID_DATE_RANGE`, `ROUTINE_DATE_RANGE_TOO_LONG`, `ROUTINE_INVALID_REPEAT_RULE`(모드에 필요한 필드가 없거나 `repeatDays` 가 빈 배열), `ROUTINE_TOO_MANY_DATES`(`repeatDates` 13개 이상) — 모두 400
 
-### GET /children/:childId/routines — 날짜별 루틴 조회
-
-**Query**: `date` (date, Y)
-
-**Response 200**
-
-```json
-{
-  "success": true,
-  "data": {
-    "date": "2026-09-01",
-    "bigRoutines": [
-      {
-        "bigRoutineId": 300,
-        "seriesId": "9f1c2e40-...",
-        "templateId": 12,
-        "title": "아침 준비",
-        "startTime": "07:30",
-        "endTime": "08:30",
-        "sortOrder": 1,
-        "smallRoutines": [
-          {
-            "smallRoutineId": 901,
-            "seriesId": "3a7b...",
-            "title": "세수하기",
-            "sortOrder": 1,
-            "status": "DONE",
-            "completedAt": "2026-09-01T07:42:00Z"
-          }
-        ]
-      }
-    ]
-  },
-  "error": null
-}
-```
-
-> ⚡ **고정 루틴 지연 생성 트리거 지점.** 조회 시점에 해당 날짜의 템플릿 기반 빅루틴이 없으면 생성한 뒤 응답합니다. 동시 요청 시 중복 생성을 막을 장치가 필요합니다 — `unique(template_id, routine_date) where deleted_at is null` 제약 + upsert를 제안합니다.
-
-- `templateId`가 null이면 템플릿 없이 직접 만든 루틴입니다.
-- `status`: `PENDING` | `DONE`
+> 🔺 **`RANGE` 기간 길이 상한 미확정** (15장 #7). 상한이 없으면 한 번의 요청으로 몇 년치 행이 생길 수 있어 **설정값으로 빼 둡니다.** `DATES` 의 12개와는 **별개 값**입니다.
 
 ### GET /children/:childId/calendar — 캘린더 조회
 
-루틴 등록 메인창 캘린더용. 날짜별 요약만 반환합니다.
+**한 달치 루틴을 상세까지 통째로** 반환합니다. 앱은 이 응답을 들고 있다가 사용자가 날짜를 누르면 **서버를 다시 부르지 않고** 가지고 있는 값에서 그 날짜를 꺼내 보여줍니다.
 
 **Query**: `from` (date, Y), `to` (date, Y)
 
@@ -752,38 +747,73 @@
 {
   "success": true,
   "data": [
-    { "date": "2026-09-01", "totalCount": 8, "doneCount": 6, "completionRate": 75.0 },
-    { "date": "2026-09-02", "totalCount": 8, "doneCount": 0, "completionRate": 0.0 }
+    {
+      "date": "2026-09-01",
+      "totalCount": 8,
+      "doneCount": 6,
+      "completionRate": 75.0,
+      "bigRoutines": [
+        {
+          "bigRoutineId": 300,
+          "seriesId": "9f1c2e40-...",
+          "title": "아침 준비",
+          "startTime": "07:30",
+          "endTime": "08:30",
+          "sortOrder": 1,
+          "smallRoutines": [
+            {
+              "smallRoutineId": 901,
+              "seriesId": "3a7b...",
+              "title": "세수하기",
+              "sortOrder": 1,
+              "status": "DONE",
+              "completedAt": "2026-09-01T07:42:00Z"
+            }
+          ]
+        }
+      ]
+    }
   ],
   "error": null
 }
 ```
 
-- 이 엔드포인트도 **지연 생성 트리거 지점**입니다. 조회 기간 전체에 대해 생성이 일어나므로 `from`~`to` 최대 범위 제한이 필요합니다. 🔺 31일을 제안합니다.
-- 🔺 응답 필드 구성은 추론. 캘린더에 점만 찍을지 이행률까지 보여줄지에 따라 달라집니다.
+- **`GET /children/:childId/routines`(날짜별 루틴 조회)는 삭제되었습니다.** 이 응답에 이미 날짜별 상세가 다 들어 있어 서버를 한 번 더 부를 이유가 없습니다.
+- **이 엔드포인트는 더 이상 생성을 하지 않습니다.** 순수하게 읽기만 합니다. 즉시 생성으로 바뀌면서 조회 시점에 만들 것이 없어졌습니다.
+- `status`: `PENDING` \| `DONE`
+- ⚠️ **앱이 들고 있는 값은 시간이 지나면 실제와 어긋납니다.** 아이가 기기에서 루틴을 완료해도 앱은 알지 못합니다. 앱은 화면에 다시 들어올 때 이 API 를 다시 부르세요.
+- 🔺 `from`~`to` 최대 범위 상한 미확정 (15장 #7). 31일을 제안합니다. 상세까지 담으므로 응답이 커집니다.
 
 ### PATCH /big-routines/:bigRoutineId — 빅루틴 수정
 
 **Request**: `title`, `startTime`, `endTime` (모두 선택, 최소 1개)
 
+**Query**: `scope` — `series`(같은 series 전체, **기본값**) \| `single`(해당 날짜만)
+
 **Response 200**: 빅루틴 단건
 
-- **해당 날짜만** 수정됩니다. `series_id`는 유지되고 다른 날짜에는 영향이 없습니다.
+- **기본이 `series` 입니다.** 반복으로 만든 루틴은 사용자 눈에 하나이므로, 월요일만 바뀌고 수 · 금이 그대로면 이상합니다. 삭제(`scope` 기본 `single`)와 기본값이 반대인 것은 의도한 것입니다. **수정은 되돌릴 수 있지만 삭제는 어렵기 때문입니다.**
+- ⚠️ **오늘보다 이전 날짜의 행은 바꾸지 않습니다.** `scope=series` 여도 그렇습니다. 지난 기록은 그때 실제로 무엇을 하기로 했었는지를 담고 있어야 합니다. 여기서 "오늘" 은 **KST 기준 오늘 날짜**입니다(1-3).
 
 ### DELETE /big-routines/:bigRoutineId — 빅루틴 삭제
 
-**Query**: `scope` — `single` (해당 날짜만) | `series` (같은 series 전체)
+**Query**: `scope` — `single` (해당 날짜만, **기본값**) \| `series` (같은 series 전체)
 
 **Response 204**
 
 - soft delete. 이행률 통계 보존을 위해 물리 삭제하지 않습니다.
-- 🔺 `scope` 기본값은 `single`을 제안합니다. 실수로 전체가 지워지는 것보다 안전합니다.
+- `scope` 기본값은 `single` 입니다. 실수로 전체가 지워지는 것보다 안전합니다.
+- `scope=series` 도 **오늘 이후 날짜만** 지웁니다. 지나간 기록은 남습니다.
 
 ### POST /big-routines/:bigRoutineId/small-routines — 스몰루틴 추가
 
 **Request**: `title` (string, Y), `order` (number, N)
 
+**Query**: `scope` — `series`(같은 series 전체, **기본값**) \| `single`(해당 날짜만)
+
 **Response 201**
+
+- ⚠️ **오늘보다 이전 날짜에는 추가하지 않습니다.** 할 일 개수가 늘면 그 날의 이행률 분모가 커져 **이미 지나간 날의 성적이 떨어집니다.** 아이가 아무것도 하지 않았는데 지난주 이행률이 나빠지는 셈입니다. 삭제도 같습니다.
 
 ```json
 {
@@ -834,9 +864,13 @@
 
 ---
 
-## 10. 고정 루틴 템플릿
+## 10. 루틴 템플릿 (저장해둔 양식)
 
-### POST /children/:childId/routine-templates — 템플릿 생성
+> ✅ **재정의 (2026-09-09)** — 템플릿은 **자주 쓰는 루틴을 저장해두고 나중에 꺼내 쓰는 양식**입니다. 자동으로 빅루틴을 만들지 않습니다.
+>
+> 이전에는 "고정 반복 루틴의 원본" 이었고 조회 시점에 빅루틴을 만들어내는 구조였습니다. 반복 생성이 빅루틴 쪽으로 옮겨가면서(9장) 그 역할이 통째로 사라졌습니다. 함께 없어진 것: 지연 생성, `is_active`, `BIG_ROUTINES.template_id`, `unique(template_id, routine_date)` 제약.
+
+### POST /children/:childId/routine-templates — 양식 저장
 
 **Request**
 
@@ -865,36 +899,37 @@
     "smallRoutines": [
       { "title": "숙제하기", "order": 1 },
       { "title": "책 읽기", "order": 2 }
-    ],
-    "isActive": true
+    ]
   },
   "error": null
 }
 ```
 
-- 템플릿의 `smallRoutines`는 ERD상 `jsonb` 컬럼입니다. 별도 테이블이 아니므로 개별 id가 없습니다.
+- 템플릿의 `smallRoutines` 는 ERD 상 `jsonb` 컬럼입니다. 별도 테이블이 아니므로 개별 id 가 없습니다.
+- **반복 관련 필드가 없습니다.** 반복은 빅루틴을 만들 때 정합니다(9장 `repeatType`).
+- 응답에 `isActive` 가 없습니다. 컬럼이 삭제되었습니다.
 
-> ❌ **결정 — 반복 요일 미지원 (개발 제외).** 요일별 반복("평일만" 등)은 구현 범위에서 제외하기로 했습니다(ERD 5-1). 템플릿은 **매일 반복만** 지원하며, 요일 지정 필드는 추가하지 않습니다.
+### GET /children/:childId/routine-templates — 양식 목록
 
-### GET /children/:childId/routine-templates — 템플릿 목록
-
-활성화된(`is_active = true`) 템플릿만 반환합니다.
+삭제되지 않은(`deleted_at is null`) 양식을 반환합니다.
 
 **Response 200**: 템플릿 배열
 
-### PATCH /routine-templates/:templateId — 템플릿 수정
+### PATCH /routine-templates/:templateId — 양식 수정
 
 **Request**: `title`, `startTime`, `endTime`, `smallRoutines` (모두 선택)
 
 **Response 200**: 템플릿 단건
 
-> ⚠️ **이후 생성분부터 적용됩니다.** 이미 생성된 빅루틴은 변경되지 않습니다. 앱에서 사용자에게 안내해야 혼란이 없습니다.
+> ⚠️ **이미 만들어진 빅루틴은 바뀌지 않습니다.** 양식을 꺼내 쓰는 순간 값이 복사되고 둘의 연결은 거기서 끝나기 때문입니다. 워드의 서식 파일을 고쳐도 이미 만든 문서는 그대로인 것과 같습니다.
+>
+> 반면 **빅루틴을 고치면 같은 `series_id` 의 다른 날짜도 함께 바뀝니다**(9장). 둘이 다르게 동작하므로 앱에서 사용자에게 구분해 안내해야 혼란이 없습니다.
 
-### DELETE /routine-templates/:templateId — 템플릿 비활성화
+### DELETE /routine-templates/:templateId — 양식 삭제
 
 **Response 204**
 
-- `is_active = false` 처리로 **자동 생성만 중단**됩니다. 기존에 생성된 빅루틴은 유지됩니다.
+- soft delete (`deleted_at` 채움). 이 양식으로 이미 만들어 둔 빅루틴은 **그대로 남습니다.**
 
 ---
 
@@ -1202,8 +1237,9 @@
 ## 14. 온보딩 & 페어링 호출 순서
 
 ```
-0. 앱 → 서버   온보딩 1차. POST /api/v1/auth/social-login
-                → JWT 발급 및 유저 인증 (isFirstLogin으로 분기)
+0. 앱 → 서버   온보딩 1차. POST /api/v1/auth/signup { email, password }
+                → accessUuid 발급, 가입과 동시에 로그인 상태
+                → user.name 이 null 이므로 앱은 성명 입력 화면으로 분기
                   PATCH /api/v1/users/me 로 보호자 성명 입력
 
 1. 앱 → 서버   온보딩 2차. POST /api/v1/children
@@ -1217,31 +1253,33 @@
 
 3. 기기 → 서버 POST /device-api/v1/claim { pairingCode, deviceUid, firmware }
                 → 서버가 pairingCode로 PENDING 행 조회
-                → device_uid, token_hash, secret_hash, paired_at 채우고 ACTIVE
-                → 응답으로 token, secret 반환 (평문을 볼 수 있는 유일한 시점)
+                → device_uid, paired_at 채우고 ACTIVE
+                → 서버가 device_access_uuid 를 새로 만들어 저장
+                → 응답으로 deviceAccessUuid 반환 (기기가 영속 저장 필수)
 
 4. 앱 → 서버   GET /api/v1/devices/{deviceId} 폴링
                 → status가 PENDING → ACTIVE로 바뀌면 온보딩 완료
-                ※ 2초 간격 / 최대 3분 제안, 타임아웃 시 재시도 화면
+                ※ 타임아웃 10분 확정. 폴링 주기는 미확정 (15장 #5)
 
-5. 기기 → 서버 Authorization: Bearer <token> 으로 POST /device-api/v1/sync
-                DEVICE_TOKEN_INVALID 수신 시
-                → POST /device-api/v1/token/refresh 로 자체 복구
+5. 기기 → 서버 X-Device-Uuid: <deviceAccessUuid> 로 POST /device-api/v1/sync
+                DEVICE_UNAUTHORIZED 수신 시
+                → 자체 복구 경로 없음. 재페어링을 안내
 ```
+
+> **앱의 모든 요청**은 0번에서 받은 `accessUuid` 를 `X-Access-Uuid` 헤더에 담습니다. 만료가 없으므로 갱신 호출이 따로 없습니다.
 
 ## 15. 확정 필요 항목
 
 | # | 항목 | 영향 | 결정 시한 |
 |---|---|---|---|
-| 1 | 기기 API에 공통 envelope 적용 여부 | 디바이스 API 3종, 기기 펌웨어 | Phase 1 이전 |
-| 2 | access/refresh 토큰 만료 시간, rotation 여부 | 인증 | Phase 1 |
-| 11 | **JWT 서명 알고리즘과 비밀키 관리 방식** (HS256 대칭키 / RS256 비대칭키, 키를 환경변수·시크릿 어디에 둘지) | JWT 검증 필터 구현 자체 | Phase 1 (1-4 이전) |
-| 12 | **요청·응답 로깅에서 가릴 항목** (`idToken`, `accessToken`, `refreshToken`, 기기 `token`·`secret`, `pairingCode`) | 보안 설정의 로깅 필터 | Phase 1 (1-2 마무리 전) |
-| 3 | 자녀당 최대 기기 수 | `DEVICE_LIMIT_EXCEEDED` 임계값 | 회의 |
+| 1 | 기기 API에 공통 envelope 적용 여부 | 디바이스 API 2종, 기기 펌웨어 | Phase 1 이전 |
+| 2 | **비밀번호 해시 방식**과 **최소 길이 · 문자 조합 정책** | `POST /auth/signup` 구현 자체 | Phase 1 |
+| 12 | **요청·응답 로깅에서 가릴 항목** (`password`, `accessUuid`, `deviceAccessUuid`, `pairingCode`) | 보안 설정의 로깅 필터 | Phase 1 (1-2 마무리 전) |
+| 3 | `pairingCode` **자릿수 · 문자 구성** | 페어링 코드 생성기 구현 자체 | Phase 2 |
 | 4 | 회원 탈퇴 시 cascade 정책 | `DELETE /users/me` 구현 자체 | Phase 2 |
-| 5 | 페어링 폴링 주기·타임아웃 | 앱·서버 합의 사항 | Phase 2 |
-| 6 | `relationship` enum **값 목록** 확정 (enum 사용은 확정) | 자녀 등록 | 회의 |
-| 7 | 조회 기간 상한 (calendar 31일, stats 90일 제안) | 루틴·대시보드 | Phase 3 |
+| 5 | 페어링 폴링 **주기** (몇 초마다 호출할지) | 앱·서버 합의 사항. **타임아웃은 10분으로 확정** | Phase 2 |
+| 6 | 만료 PENDING 행 **정리 배치 주기** | 페어링 정리 | Phase 2 |
+| 7 | 조회 기간 상한 — calendar `from`~`to`(31일 제안), `RANGE` 반복 기간 길이, stats(90일 제안) | 루틴·대시보드 | Phase 3 |
 | 8 | sync 부분 실패 처리, `dates` 최대 길이 | 디바이스 sync | Phase 4 |
 | 9 | 인사이트 종류와 생성 규칙 | 대시보드 | Phase 5 |
 | 10 | 캐릭터 획득 시나리오, `rarity`/`weight` 사용 여부 (진화 규칙은 int 고정으로 확정) | 캐릭터 API | 회의 |
@@ -1252,8 +1290,21 @@
 
 | 항목 | 결정 |
 |---|---|
+| **JWT 서명 알고리즘 · 키 관리** | ✅ **소멸.** JWT 를 쓰지 않기로 해 결정할 대상이 없어짐 (2026-09-09) |
+| **access/refresh 토큰 만료 · rotation** | ✅ **소멸.** 만료 없는 UUID 방식으로 전환 (2026-09-09) |
+| **기기 `token` · `secret` 해시 방식** | ✅ **소멸.** 기기 토큰 체계 삭제 (2026-09-09) |
+| **지연 생성 동시성 방어** | ✅ **소멸.** 빅루틴 즉시 생성으로 전환, 조회 시점 생성이 없어짐 (2026-09-09) |
+| 로그인 방식 | ✅ **이메일 · 비밀번호.** 소셜 로그인 삭제. 비밀번호 찾기 · 이메일 인증 **구현 안 함** (2026-09-09) |
+| 단일 루틴 / 복합 루틴 구분 | ✅ **서버는 구분하지 않음.** 앱이 `smallRoutines` 길이로 판단 (2026-09-09) |
+| 루틴 반복 생성 | ✅ **빅루틴에서 `RANGE` / `WEEKLY` / `DATES` 3종, 배타 선택, 즉시 생성** (2026-09-09) |
+| `DATES` 날짜 개수 상한 | ✅ **12개** (2026-09-09) |
+| 빅루틴 수정 · 삭제 전파 범위 | ✅ **같은 `series_id` 전체, 단 오늘 이전 날짜 제외.** 수정 기본 `series`, 삭제 기본 `single` (2026-09-09) |
+| 템플릿의 역할 | ✅ **저장해둔 양식.** 수정해도 이미 만든 빅루틴에 전파되지 않음 (2026-09-09) |
+| 날짜별 루틴 조회 API | ✅ **삭제.** 캘린더가 한 달치 상세를 통째로 반환 (2026-09-09) |
 | 타임존 정책 | ✅ 표준 UTC 방식 확정 (서버 UTC 저장, 앱·기기 KST 변환) |
-| `relationship` enum 사용 | ✅ enum 고정 확정 (값 목록만 회의 대기) |
+| `relationship` enum 값 목록 | ✅ **`PARENT` · `ADMIN` 2개** (임시 확정) |
 | 캐릭터 진화 규칙 | ✅ 미션 N개 수행 시 진화, 임계값 N을 int 상수로 고정 |
-| 템플릿 반복 요일 | ❌ 개발 제외 (매일 반복만 지원) |
 | 커뮤니티 (댓글 삭제 정책·카운터 갱신·관리자 신고) | ❌ 구현 제외 |
+| 보호자당 최대 자녀 수 | ✅ **10명** |
+| 자녀당 최대 기기 수 | ✅ **10대** |
+| 페어링 폴링 **타임아웃** | ✅ **10분.** 페어링 코드 만료(10분)와 같은 값이라 앱이 포기하는 시점과 서버에서 코드가 죽는 시점이 일치한다 |

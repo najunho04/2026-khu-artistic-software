@@ -14,34 +14,44 @@ import tools.jackson.databind.ObjectMapper;
 /**
  * 보안 필터 체인 설정. "API.md" 1-1 과 "ROADMAP.md" 1-2 를 따른다.
  *
- * 체인을 두 개로 나누는 것이 이 클래스의 핵심이다. 앱(보호자)은 JWT 로 인증하고
- * 기기는 claim 때 발급한 opaque 토큰(내용이 없는 무작위 문자열 토큰)을 DB 의
- * 해시와 대조해 인증한다. 검증 방법이 아예 달라서 한 체인에 섞으면 한쪽 방식이
- * 다른 쪽 경로에도 적용된다. "API.md" 1-1 도 "/device-api/** 에는 JWT 필터가
- * 걸리지 않아야 한다" 고 명시하고 있다.
+ * 체인을 두 개로 나누는 것이 이 클래스의 핵심이다. 앱(보호자)은 로그인 때 발급한
+ * "access_uuid" 를 "X-Access-Uuid" 헤더로 보내고 서버는 그 값으로 USERS 를 찾는다.
+ * 기기는 페어링 때 발급한 "device_access_uuid" 를 "X-Device-Uuid" 헤더로 보내고
+ * 서버는 그 값으로 DEVICES 를 찾는다. 읽는 헤더도 조회하는 테이블도 달라서
+ * 한 체인에 섞으면 한쪽 방식이 다른 쪽 경로에도 적용된다. 앱용 필터가 기기 경로에
+ * 걸리면 기기 요청이 USERS 에서 유저를 찾다가 반드시 실패한다.
  *
- * 두 체인 모두 세션을 만들지 않는다. 앱과 기기 모두 매 요청에 토큰을 실어 보내는
- * 방식이라 서버가 로그인 상태를 들고 있을 이유가 없기 때문이다. 세션이 없으므로
- * CSRF 보호도 끈다. CSRF 공격은 브라우저가 쿠키를 자동으로 실어 보내는 성질을
- * 이용하는 것인데, 여기서는 쿠키를 쓰지 않는다.
+ * JWT 는 쓰지 않는다. 서명 검증도 만료 판정도 재발급도 없고, 헤더 값으로 행 하나를
+ * 찾는 것이 인증의 전부다. 그 대가로 값이 새어 나가면 로그아웃 외에 되찾을 방법이
+ * 없다. 공모전 범위에서 알고 받아들인 선택이다. ("API.md" 1-1)
+ *
+ * 두 체인 모두 세션을 만들지 않는다. 매 요청에 값을 실어 보내는 방식이라 서버가
+ * 로그인 상태를 들고 있을 이유가 없기 때문이다. 세션이 없으므로 CSRF 보호도 끈다.
+ * CSRF 공격은 브라우저가 쿠키를 자동으로 실어 보내는 성질을 이용하는 것인데,
+ * 여기서는 쿠키를 쓰지 않는다.
  */
 @Configuration
 @EnableWebSecurity
 public class SecurityConfiguration {
 
 	// "API.md" 1-1 의 인증 불필요 엔드포인트 중 앱 쪽 2개.
-	// 아직 토큰이 없는 상태에서 호출되므로 인증을 걸 수 없다.
+	// 둘 다 아직 access_uuid 를 받기 전에 호출되므로 인증을 걸 수 없다.
+	// signup 과 login 이 나뉘어 있는 것은 소셜 로그인과 달리 가입과 로그인이
+	// 별개의 행위이기 때문이다.
 	private static final String[] APP_PUBLIC_PATHS = {
-		"/api/v1/auth/social-login",
-		"/api/v1/auth/refresh"
+		"/api/v1/auth/signup",
+		"/api/v1/auth/login"
 	};
 
-	// "API.md" 1-1 의 인증 불필요 엔드포인트 중 기기 쪽 2개.
-	// claim 은 토큰을 발급받기 전이고, token/refresh 는 토큰이 만료·손상됐을 때
-	// 재페어링 없이 복구되는 유일한 경로다.
+	// "API.md" 1-1 의 인증 불필요 엔드포인트 중 기기 쪽 1개.
+	// claim 은 device_access_uuid 를 발급받는 바로 그 호출이라 인증을 걸 수 없다.
+	//
+	// 예전에는 "/device-api/v1/token/refresh" 도 여기 있었다. 기기 토큰 체계를
+	// 없애면서 그 경로 자체가 삭제되어 화이트리스트에서도 뺐다. 사라진 경로를
+	// 화이트리스트에 남겨두면 나중에 같은 주소에 다른 기능을 붙였을 때
+	// 아무 인증 없이 열리게 된다.
 	private static final String[] DEVICE_PUBLIC_PATHS = {
-		"/device-api/v1/claim",
-		"/device-api/v1/token/refresh"
+		"/device-api/v1/claim"
 	};
 
 	/**

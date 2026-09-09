@@ -31,10 +31,15 @@ public enum ErrorCode {
 	INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "일시적인 오류가 발생했습니다."),
 
 	// "API.md" 3-2. 인증 · 유저
-	AUTH_INVALID_PROVIDER(HttpStatus.BAD_REQUEST, "지원하지 않는 로그인 방식입니다."),
-	AUTH_INVALID_ID_TOKEN(HttpStatus.UNAUTHORIZED, "소셜 로그인에 실패했습니다."),
-	AUTH_TOKEN_EXPIRED(HttpStatus.UNAUTHORIZED, "로그인이 만료되었습니다. 다시 로그인해 주세요."),
-	AUTH_REFRESH_TOKEN_INVALID(HttpStatus.UNAUTHORIZED, "다시 로그인해 주세요."),
+	AUTH_EMAIL_ALREADY_EXISTS(HttpStatus.CONFLICT, "이미 가입된 이메일입니다."),
+	AUTH_INVALID_EMAIL_FORMAT(HttpStatus.BAD_REQUEST, "이메일 형식이 올바르지 않습니다."),
+	// 이메일이 없을 때와 비밀번호가 틀릴 때 "둘 다" 이 코드를 쓴다.
+	// 구분해서 알려주면 "이 이메일은 가입되어 있다" 는 사실이 새어 나가기 때문이다.
+	// 코드를 하나만 두면 구분해 응답할 자리 자체가 없어진다.
+	AUTH_INVALID_CREDENTIALS(HttpStatus.UNAUTHORIZED, "이메일 또는 비밀번호가 올바르지 않습니다."),
+	// 헤더가 없거나 값이 유효하지 않은 경우는 3-1 의 공통 코드 UNAUTHORIZED 를 쓴다.
+	// 인증 실패마다 새 코드를 만들면 같은 뜻의 코드가 둘이 되어
+	// 앱이 어느 쪽으로 분기해야 할지 모르게 된다.
 	USER_NOT_FOUND(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."),
 	USER_ALREADY_WITHDRAWN(HttpStatus.CONFLICT, "이미 탈퇴한 계정입니다."),
 
@@ -51,16 +56,22 @@ public enum ErrorCode {
 	PAIRING_CODE_EXPIRED(HttpStatus.GONE, "페어링 코드가 만료되었습니다."),
 	PAIRING_CODE_ALREADY_USED(HttpStatus.CONFLICT, "이미 사용된 페어링 코드입니다."),
 	DEVICE_UID_ALREADY_PAIRED(HttpStatus.CONFLICT, "이미 다른 계정에 연결된 기기입니다."),
-	DEVICE_TOKEN_INVALID(HttpStatus.UNAUTHORIZED, "기기 인증에 실패했습니다."),
-	DEVICE_SECRET_INVALID(HttpStatus.UNAUTHORIZED, "기기 인증 정보가 올바르지 않습니다."),
+	// 기기 토큰 체계를 없애면서 DEVICE_TOKEN_INVALID 와 DEVICE_SECRET_INVALID 가
+	// 이 하나로 합쳐졌다. token 과 secret 이 사라져 실패 사유를 나눌 근거가 없어졌다.
+	// 기기는 이 코드를 받아도 자체 복구할 방법이 없으므로 재페어링을 안내해야 한다.
+	DEVICE_UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "기기 인증에 실패했습니다."),
 
 	// "API.md" 3-5. 루틴
 	BIG_ROUTINE_NOT_FOUND(HttpStatus.NOT_FOUND, "루틴을 찾을 수 없습니다."),
 	SMALL_ROUTINE_NOT_FOUND(HttpStatus.NOT_FOUND, "할 일을 찾을 수 없습니다."),
-	ROUTINE_TEMPLATE_NOT_FOUND(HttpStatus.NOT_FOUND, "고정 루틴을 찾을 수 없습니다."),
+	ROUTINE_TEMPLATE_NOT_FOUND(HttpStatus.NOT_FOUND, "저장해둔 루틴 양식을 찾을 수 없습니다."),
 	ROUTINE_INVALID_TIME_RANGE(HttpStatus.BAD_REQUEST, "종료 시각이 시작 시각보다 빠를 수 없습니다."),
 	ROUTINE_INVALID_DATE_RANGE(HttpStatus.BAD_REQUEST, "종료일이 시작일보다 빠를 수 없습니다."),
 	ROUTINE_DATE_RANGE_TOO_LONG(HttpStatus.BAD_REQUEST, "한 번에 등록할 수 있는 기간을 초과했습니다."),
+	// 반복 모드(RANGE/WEEKLY/DATES)에 필요한 필드가 없거나 repeatDays 가 빈 배열인 경우.
+	ROUTINE_INVALID_REPEAT_RULE(HttpStatus.BAD_REQUEST, "반복 설정이 올바르지 않습니다."),
+	// DATES 모드에서 지정한 날짜가 상한(12개)을 넘은 경우.
+	ROUTINE_TOO_MANY_DATES(HttpStatus.BAD_REQUEST, "한 번에 지정할 수 있는 날짜 수를 초과했습니다."),
 	ROUTINE_ORDER_MISMATCH(HttpStatus.BAD_REQUEST, "정렬 대상이 올바르지 않습니다."),
 
 	// "API.md" 3-6. 커뮤니티 · 캐릭터
