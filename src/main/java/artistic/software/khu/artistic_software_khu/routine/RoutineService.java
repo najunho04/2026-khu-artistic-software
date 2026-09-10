@@ -523,6 +523,8 @@ public class RoutineService {
 
 		BigRoutine bigRoutine = findOwnedBigRoutine(userId, bigRoutineId);
 
+		validateUpdatedTimeRange(bigRoutine, request);
+
 		if (isSeriesScope(scope, true)) {
 			// 반복으로 만든 루틴은 사용자 눈에 하나다. 월요일만 바뀌고
 			// 수 · 금이 그대로면 이상하다.
@@ -537,6 +539,37 @@ public class RoutineService {
 
 		return BigRoutineResponse.of(
 			bigRoutine, findSmallRoutines(bigRoutineId), positionInDay(bigRoutine));
+	}
+
+	/**
+	 * 고치고 난 뒤의 시각 짝이 성립하는지 본다.
+	 *
+	 * 만들 때는 "endTime 은 startTime 보다 뒤" 를 검사하는데("API.md" 9장),
+	 * 고칠 때 검사하지 않으면 같은 규칙이 한 번의 수정으로 깨진다. 시작이
+	 * 종료보다 늦은 루틴은 기기 화면에서 길이가 음수인 칸이 되고, 그 상태를
+	 * 만든 요청은 200 을 받았으므로 앱도 서버도 이상하다고 보지 않는다.
+	 *
+	 * 보내지 않은 값은 지금 저장된 값과 견준다. 시작 시각만 고치는 요청도
+	 * 종료 시각을 지나칠 수 있기 때문이다.
+	 */
+	private void validateUpdatedTimeRange(
+		BigRoutine bigRoutine, BigRoutineUpdateRequest request) {
+
+		LocalTime startTime = (request.startTime() == null)
+			? bigRoutine.getStartTime()
+			: request.startTime();
+
+		LocalTime endTime = (request.endTime() == null)
+			? bigRoutine.getEndTime()
+			: request.endTime();
+
+		if (startTime == null || endTime == null) {
+			return;
+		}
+
+		if (!endTime.isAfter(startTime)) {
+			throw new BusinessException(ErrorCode.ROUTINE_INVALID_TIME_RANGE);
+		}
 	}
 
 	@Transactional
@@ -567,6 +600,13 @@ public class RoutineService {
 		if (request.title() == null || request.title().isBlank()) {
 			throw new BusinessException(ErrorCode.INVALID_INPUT);
 		}
+
+		// 순서를 정하기 전에 자녀 행을 잠근다. 새 순서는 "지금까지 쓴 가장 큰
+		// 값 + 1" 인데, 두 요청이 동시에 그 값을 읽으면 둘 다 같은 번호를
+		// 쓴다. 스몰루틴의 미션 식별자가 "빅루틴 시리즈 + 순서" 로 계산되므로
+		// 서로 다른 두 할 일이 같은 미션이 되고, 미션별 통계에서 한 줄로
+		// 합쳐져 보호자 눈에는 할 일 하나가 사라진 것처럼 보인다.
+		childService.lockChild(bigRoutine.getChildId());
 
 		int nextOrder = nextSmallRoutineOrder(bigRoutine);
 		UUID seriesId = deriveSmallRoutineSeriesId(bigRoutine.getSeriesId(), nextOrder);
@@ -607,21 +647,40 @@ public class RoutineService {
 
 	@Transactional
 	public List<SmallRoutineResponse> reorderSmallRoutines(
-		Long userId, Long bigRoutineId, List<Long> orderedIds) {
+		Long userId, Long bigRoutineId, List<SmallRoutineOrderRequest> requests) {
 
-		findOwnedBigRoutine(userId, bigRoutineId);
+		BigRoutine target = findOwnedBigRoutine(userId, bigRoutineId);
+
+		// 할 일 추가와 같은 잠금 아래에서 처리한다. 정렬 도중에 새 할 일이
+		// 끼어들면 방금 매긴 1, 2, 3 과 새 할 일의 번호가 겹칠 수 있다.
+		childService.lockChild(target.getChildId());
+
+		// 목록이 통째로 빠진 요청도 "누락" 이다("API.md" 9장). 여기서 걸러내지
+		// 않으면 아래의 대조에서 null 을 다루다 500 이 나가는데, 앱 입장에서는
+		// 무엇을 고쳐야 하는지 알 수 없는 오류가 된다.
+		if (requests == null) {
+			throw new BusinessException(ErrorCode.ROUTINE_ORDER_MISMATCH);
+		}
 
 		List<SmallRoutine> smallRoutines = findSmallRoutines(bigRoutineId);
 
 		// 요청 배열과 DB 목록을 먼저 대조한다. 하나라도 빠지거나 남으면
 		// 정렬을 아예 시작하지 않는다. 반쯤 바뀐 상태로 끝나면 순서가
 		// 뒤죽박죽이 되고 되돌릴 방법이 없다.
-		Set<Long> requestedIds = Set.copyOf(orderedIds);
+		List<Long> requestedIdList = requests.stream()
+			.map(SmallRoutineOrderRequest::smallRoutineId)
+			.toList();
+
+		if (requestedIdList.contains(null)) {
+			throw new BusinessException(ErrorCode.ROUTINE_ORDER_MISMATCH);
+		}
+
+		Set<Long> requestedIds = Set.copyOf(requestedIdList);
 		Set<Long> actualIds = smallRoutines.stream()
 			.map(SmallRoutine::getId)
 			.collect(Collectors.toSet());
 
-		if (orderedIds.size() != requestedIds.size() || !requestedIds.equals(actualIds)) {
+		if (requestedIdList.size() != requestedIds.size() || !requestedIds.equals(actualIds)) {
 			throw new BusinessException(ErrorCode.ROUTINE_ORDER_MISMATCH);
 		}
 
@@ -630,13 +689,33 @@ public class RoutineService {
 
 		int order = 1;
 
-		for (Long smallRoutineId : orderedIds) {
-			byId.get(smallRoutineId).changeSortOrder(order);
+		// "order" 값으로 줄을 세운 뒤 1, 2, 3 을 다시 매긴다. 만들 때와 같은
+		// 규칙이다("API.md" 9장). 보낸 숫자를 그대로 저장하면 1, 5, 9 처럼
+		// 구멍 뚫린 값이 남고, 그 값이 미션 식별자 계산에 쓰이므로 나중에
+		// 겹칠 여지가 생긴다. 값을 적지 않은 항목은 뒤로 보낸다.
+		for (SmallRoutineOrderRequest request : sortByRequestedPosition(requests)) {
+			byId.get(request.smallRoutineId()).changeSortOrder(order);
 			order++;
 		}
 
 		return findSmallRoutines(bigRoutineId).stream()
 			.map(SmallRoutineResponse::from)
+			.toList();
+	}
+
+	/**
+	 * 순서 변경 요청을 "order" 값으로 줄 세운다.
+	 *
+	 * 값을 적지 않은 항목은 뒤로 가며 보낸 배열 차례를 지킨다. 만들 때
+	 * 할 일을 줄 세우는 규칙과 같아야 앱이 두 곳에서 다르게 동작하지 않는다.
+	 */
+	private List<SmallRoutineOrderRequest> sortByRequestedPosition(
+		List<SmallRoutineOrderRequest> requests) {
+
+		return requests.stream()
+			.sorted(Comparator.comparing(
+				SmallRoutineOrderRequest::order,
+				Comparator.nullsLast(Comparator.naturalOrder())))
 			.toList();
 	}
 

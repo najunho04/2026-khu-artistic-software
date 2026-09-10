@@ -72,7 +72,9 @@ public class DeviceService {
 			throw new BusinessException(ErrorCode.INVALID_INPUT);
 		}
 
-		childService.findOwnedChild(userId, request.childId());
+		// 자녀 행을 잠근 채로 센다. 잠그지 않으면 두 요청이 같은 숫자를 보고
+		// 둘 다 통과해 자녀당 상한을 넘긴다.
+		childService.findOwnedChildForUpdate(userId, request.childId());
 
 		// 해제된 기기는 세지 않는다. 세지 않아야 해제한 뒤 자리가 난다.
 		if (deviceRepository.countByChildIdAndDeletedAtIsNull(request.childId())
@@ -129,7 +131,11 @@ public class DeviceService {
 
 		// claim 이 끝난 코드는 NULL 로 비워지므로, 이미 쓴 코드는 여기서 자연히
 		// 걸러진다. "이미 사용됨" 을 따로 표시하지 않아도 되는 이유다.
-		Device device = deviceRepository.findByPairingCodeAndDeletedAtIsNull(request.pairingCode())
+		// 행을 잠그고 읽는다. 같은 코드로 두 기기가 동시에 들어오면 뒤의 것은
+		// 앞의 것이 끝날 때까지 기다렸다가 조건을 다시 보는데, 그때는 코드가
+		// 이미 비워져 있어 아무것도 찾지 못한다. 일회용이 실제로 지켜지는 곳이다.
+		Device device = deviceRepository
+			.findByPairingCodeAndDeletedAtIsNullForUpdate(request.pairingCode())
 			.orElseThrow(() -> new BusinessException(ErrorCode.PAIRING_CODE_NOT_FOUND));
 
 		Instant now = clock.instant();
@@ -167,17 +173,24 @@ public class DeviceService {
 	}
 
 	@Transactional(readOnly = true)
-	public DeviceResponse findOne(Long userId, Long deviceId) {
-		return DeviceResponse.from(findOwnedDevice(userId, deviceId));
+	public DeviceDetailResponse findOne(Long userId, Long deviceId) {
+		return DeviceDetailResponse.from(findOwnedDevice(userId, deviceId));
 	}
 
 	@Transactional
-	public DeviceResponse update(Long userId, Long deviceId, DeviceUpdateRequest request) {
+	public DeviceDetailResponse update(Long userId, Long deviceId, DeviceUpdateRequest request) {
+		// "API.md" 7장이 nickname 을 필수로 두었다. 빈 요청을 200 으로 돌려주면
+		// 앱은 바뀌었다고 믿는데 실제로는 아무것도 바뀌지 않아, 화면과 서버가
+		// 어긋난 채로 남는다.
+		if (request.nickname() == null || request.nickname().isBlank()) {
+			throw new BusinessException(ErrorCode.INVALID_INPUT);
+		}
+
 		Device device = findOwnedDevice(userId, deviceId);
 
 		device.changeNickname(request.nickname());
 
-		return DeviceResponse.from(device);
+		return DeviceDetailResponse.from(device);
 	}
 
 	@Transactional

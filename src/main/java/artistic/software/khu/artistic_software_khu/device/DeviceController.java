@@ -51,7 +51,7 @@ public class DeviceController {
 	}
 
 	@GetMapping("/devices/{deviceId}")
-	public ResponseEntity<ApiResponse<DeviceResponse>> findOne(
+	public ResponseEntity<ApiResponse<DeviceDetailResponse>> findOne(
 		@AuthenticationPrincipal AuthenticatedUser authenticatedUser,
 		@PathVariable Long deviceId) {
 
@@ -60,7 +60,7 @@ public class DeviceController {
 	}
 
 	@PatchMapping("/devices/{deviceId}")
-	public ResponseEntity<ApiResponse<DeviceResponse>> update(
+	public ResponseEntity<ApiResponse<DeviceDetailResponse>> update(
 		@AuthenticationPrincipal AuthenticatedUser authenticatedUser,
 		@PathVariable Long deviceId,
 		@RequestBody DeviceUpdateRequest request) {

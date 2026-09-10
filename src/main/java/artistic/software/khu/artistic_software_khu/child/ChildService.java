@@ -3,8 +3,10 @@ package artistic.software.khu.artistic_software_khu.child;
 import artistic.software.khu.artistic_software_khu.common.BusinessException;
 import artistic.software.khu.artistic_software_khu.common.ErrorCode;
 import artistic.software.khu.artistic_software_khu.device.DeviceRepository;
+import artistic.software.khu.artistic_software_khu.user.UserRepository;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,19 +23,31 @@ public class ChildService {
 	// "API.md" 3-3 이 확정한 보호자당 자녀 상한.
 	private static final int MAXIMUM_CHILD_COUNT = 10;
 
+	// "ERD.md" 5-2 — 날짜 경계는 KST 기준이다. 서버는 UTC 로 돌지만 "오늘" 은
+	// 사용자가 사는 곳의 오늘이어야 한다. UTC 로 판단하면 한국 시각 오전 9시
+	// 이전에는 사용자가 화면에서 고른 "오늘" 이 서버에게 내일로 보여서,
+	// 새벽에만 자녀 등록이 실패한다. 아침이 되면 되므로 재현이 매우 어렵다.
+	private static final ZoneId KOREA_ZONE = ZoneId.of("Asia/Seoul");
+
 	private final ChildRepository childRepository;
 
 	private final DeviceRepository deviceRepository;
+
+	private final UserRepository userRepository;
 
 	// 시각을 직접 부르지 않고 주입받는 이유는 테스트에서 시각을 고정할 수 있게
 	// 하기 위해서다. Instant.now() 를 코드 안에서 부르면 그 순간이 검증 불가능해진다.
 	private final Clock clock;
 
 	public ChildService(
-		ChildRepository childRepository, DeviceRepository deviceRepository, Clock clock) {
+		ChildRepository childRepository,
+		DeviceRepository deviceRepository,
+		UserRepository userRepository,
+		Clock clock) {
 
 		this.childRepository = childRepository;
 		this.deviceRepository = deviceRepository;
+		this.userRepository = userRepository;
 		this.clock = clock;
 	}
 
@@ -47,6 +61,11 @@ public class ChildService {
 		if (relationship == null) {
 			throw new BusinessException(ErrorCode.INVALID_INPUT);
 		}
+
+		// 상한을 세기 전에 보호자 행을 잠근다. 세는 것과 넣는 것 사이에 다른
+		// 요청이 끼어들면 둘 다 통과해 11명이 등록되기 때문이다. 잠금은
+		// 그 보호자에게 들어온 요청만 기다리게 한다.
+		userRepository.findByIdAndDeletedAtIsNullForUpdate(userId);
 
 		// 삭제된 자녀는 세지 않는다. 세지 않아야 지운 뒤 자리가 난다.
 		if (childRepository.countByUserIdAndDeletedAtIsNull(userId) >= MAXIMUM_CHILD_COUNT) {
@@ -128,6 +147,39 @@ public class ChildService {
 		return child;
 	}
 
+	/**
+	 * 내 자녀 하나를 찾되 그 행을 "잠그고" 읽는다.
+	 *
+	 * 같은 자녀에 동시에 들어온 요청을 한 줄로 세워야 하는 곳에서 쓴다.
+	 * 지금은 기기 페어링(자녀당 10대 상한)이 부른다. 세는 것과 넣는 것 사이에
+	 * 다른 요청이 끼어들면 둘 다 상한을 통과해 11대가 붙기 때문이다.
+	 */
+	@Transactional
+	public Child findOwnedChildForUpdate(Long userId, Long childId) {
+		Child child = childRepository.findByIdAndDeletedAtIsNullForUpdate(childId)
+			.orElseThrow(() -> new BusinessException(ErrorCode.CHILD_NOT_FOUND));
+
+		if (!child.isOwnedBy(userId)) {
+			throw new BusinessException(ErrorCode.CHILD_FORBIDDEN);
+		}
+
+		return child;
+	}
+
+	/**
+	 * 자녀 행을 잠그기만 한다. 소유권 검사는 하지 않는다.
+	 *
+	 * 기기 동기화가 부른다. 그 경로는 기기 인증 필터가 이미 "이 기기가 붙은
+	 * 자녀" 를 확정해 넘기므로 소유권을 다시 볼 것이 없다. 잠그는 이유는
+	 * 같은 자녀에게 동시에 들어온 동기화를 한 줄로 세우기 위해서다. 그러지
+	 * 않으면 두 요청이 같은 완료 기록을 각각 "이번에 처음 완료됐다" 로 세어
+	 * 캐릭터 경험치가 두 번 오른다("API.md" 12-1 의 멱등성).
+	 */
+	@Transactional
+	public void lockChild(Long childId) {
+		childRepository.findByIdAndDeletedAtIsNullForUpdate(childId);
+	}
+
 	private void validateNameRequired(String name) {
 		if (name == null || name.isBlank()) {
 			throw new BusinessException(ErrorCode.INVALID_INPUT);
@@ -140,7 +192,7 @@ public class ChildService {
 		}
 
 		// "API.md" 6장이 "미래 날짜 불가" 라고 적었다. 오늘은 KST 기준이다.
-		if (birthDate.isAfter(LocalDate.now(clock))) {
+		if (birthDate.isAfter(LocalDate.now(clock.withZone(KOREA_ZONE)))) {
 			throw new BusinessException(ErrorCode.INVALID_INPUT);
 		}
 	}

@@ -76,6 +76,12 @@ public class AuthenticationService {
 	 */
 	@Transactional
 	public AuthenticationResponse logIn(LogInRequest request) {
+		// 두 값 중 하나라도 비어 있으면 비밀번호를 맞춰보기 "전에" 거절한다.
+		// 비밀번호를 인코더에 그대로 넘기면 null 을 받은 인코더가 예외를 던져
+		// 500 이 나가는데, 값을 빠뜨린 것은 서버 잘못이 아니다.
+		// "API.md" 4장이 두 필드를 모두 필수로 두었다.
+		validateCredentialsPresent(request);
+
 		// 이메일이 없는 경우와 비밀번호가 틀린 경우를 "같은 예외" 로 처리한다.
 		// 구분해 알려주면 "이 이메일은 가입되어 있다" 는 사실이 새어 나가고,
 		// 공격자가 이메일 목록을 넣어보며 가입 여부를 알아낼 수 있게 된다.
@@ -97,6 +103,22 @@ public class AuthenticationService {
 	@Transactional
 	public void logOut(Long userId) {
 		userRepository.findById(userId).ifPresent(User::clearAccessUuid);
+	}
+
+	/**
+	 * 로그인에 필요한 두 값이 들어왔는지 본다.
+	 *
+	 * 여기서는 이메일이 가입돼 있는지 보지 않으므로 "이 이메일은 있다" 는
+	 * 사실이 새어 나가지 않는다. 값을 아예 안 보낸 것과 틀리게 보낸 것은
+	 * 다른 문제이고, 앞엣것은 앱이 고쳐야 할 입력 오류다.
+	 */
+	private void validateCredentialsPresent(LogInRequest request) {
+		boolean emailMissing = request.email() == null || request.email().isBlank();
+		boolean passwordMissing = request.password() == null || request.password().isBlank();
+
+		if (emailMissing || passwordMissing) {
+			throw new BusinessException(ErrorCode.INVALID_INPUT);
+		}
 	}
 
 	private void validateEmailFormat(String email) {

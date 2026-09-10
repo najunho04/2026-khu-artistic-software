@@ -293,6 +293,30 @@ class DeviceSyncIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("필수 항목이 빠진 동기화 요청은 거절한다")
+	void missingRequiredSyncFieldsAreRejected() throws Exception {
+		// "API.md" 8장은 battery · firmware · completions · dates 를 모두
+		// 필수로 두었다. 빠진 채로 200 을 돌려주면 기기는 반영됐다고 믿는데
+		// 서버는 아무것도 하지 않은 상태로 갈라진다. 특히 dates 가 빠지면
+		// 루틴을 한 줄도 받지 못하면서 오류도 뜨지 않아, 기기 화면이 비어 있는
+		// 이유를 아무도 알 수 없다.
+		mockMvc.perform(syncRequest("""
+			{"firmware": "1.0.3", "completions": [], "dates": []}"""))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+
+		mockMvc.perform(syncRequest("""
+			{"battery": 70, "firmware": "1.0.3", "completions": []}"""))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+
+		mockMvc.perform(syncRequest("""
+			{"battery": 70, "firmware": "1.0.3", "dates": []}"""))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+	}
+
+	@Test
 	@DisplayName("배터리 값이 범위를 벗어나면 거절한다")
 	void batteryOutOfRangeIsRejected() throws Exception {
 		mockMvc.perform(syncRequest("""

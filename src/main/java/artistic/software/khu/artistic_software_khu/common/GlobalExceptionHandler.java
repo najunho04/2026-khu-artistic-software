@@ -4,10 +4,13 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
@@ -19,8 +22,9 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
  * 만들면 같은 오류가 API 마다 다른 모양으로 나가기 때문이다. 앱은 code 로
  * 분기하므로 그 형태가 흔들리면 앱의 화면 분기가 통째로 어긋난다.
  *
- * 핸들러는 다섯 개다. 우리가 의도적으로 던진 업무 예외, 요청 검증 실패,
- * 없는 경로, 허용되지 않은 메서드, 그리고 나머지 전부다.
+ * 핸들러는 여섯 개다. 우리가 의도적으로 던진 업무 예외, 요청 검증 실패,
+ * 요청의 형태 자체가 깨진 경우, 없는 경로, 허용되지 않은 메서드,
+ * 그리고 나머지 전부다.
  *
  * 없는 경로와 메서드 불일치를 따로 잡는 이유는, 그러지 않으면 맨 아래의
  * "나머지 전부" 핸들러가 그것들까지 삼켜 500 으로 내보내기 때문이다.
@@ -66,6 +70,35 @@ public class GlobalExceptionHandler {
 
 		return ResponseEntity.status(ErrorCode.INVALID_INPUT.getHttpStatus())
 			.body(ApiResponse.failure(ErrorCode.INVALID_INPUT, details));
+	}
+
+	/**
+	 * 요청의 형태 자체가 깨져 컨트롤러까지 닿지 못한 경우를 처리한다.
+	 *
+	 * 세 가지를 함께 잡는다. 경로 변수나 조회 파라미터의 타입이 맞지 않는 경우,
+	 * 필수 조회 파라미터가 빠진 경우, 본문이 JSON 으로 읽히지 않는 경우다.
+	 * 밖에서 보면 셋 다 "앱이 보낸 값이 틀렸다" 는 같은 뜻이고,
+	 * "API.md" 2-3 이 그것을 400 으로 정해 두었다.
+	 *
+	 * 이 핸들러가 없으면 셋 다 맨 아래의 "나머지 전부" 로 떨어져 500 이 나간다.
+	 * 500 은 "서버가 고장났다" 는 뜻이라 앱이 재시도하는데, 몇 번을 보내도
+	 * 같은 결과이고 실제로 고쳐야 할 곳은 앱이다. 원인을 찾는 동안 장애로 취급된다.
+	 */
+	@ExceptionHandler({
+		MethodArgumentTypeMismatchException.class,
+		MissingServletRequestParameterException.class,
+		HttpMessageNotReadableException.class})
+	public ResponseEntity<ApiResponse<Void>> handleMalformedRequest(Exception exception) {
+		// 어느 값이 문제인지 알 수 있을 때만 details 에 담는다. 본문이 통째로
+		// 깨진 경우에는 필드를 특정할 수 없어 비워 둔다.
+		List<FieldErrorDetail> details = toMalformedRequestDetails(exception);
+
+		logger.warn("요청 형식 오류: {}", exception.getMessage());
+
+		return ResponseEntity.status(ErrorCode.INVALID_INPUT.getHttpStatus())
+			.body(details.isEmpty()
+				? ApiResponse.failure(ErrorCode.INVALID_INPUT)
+				: ApiResponse.failure(ErrorCode.INVALID_INPUT, details));
 	}
 
 	/**
@@ -116,6 +149,26 @@ public class GlobalExceptionHandler {
 
 		return ResponseEntity.status(ErrorCode.INTERNAL_ERROR.getHttpStatus())
 			.body(ApiResponse.failure(ErrorCode.INTERNAL_ERROR));
+	}
+
+	/**
+	 * 형태가 깨진 요청에서 문제가 된 값의 이름을 뽑아낸다.
+	 *
+	 * 이름을 알 수 없으면 빈 목록이다. 본문이 JSON 으로 읽히지 않는 경우가
+	 * 그렇다. 그때 예외 메시지를 그대로 담으면 내부 구현이 밖으로 새어 나간다.
+	 */
+	private static List<FieldErrorDetail> toMalformedRequestDetails(Exception exception) {
+		if (exception instanceof MethodArgumentTypeMismatchException typeMismatch) {
+			return List.of(new FieldErrorDetail(
+				typeMismatch.getName(), "형식이 올바르지 않습니다."));
+		}
+
+		if (exception instanceof MissingServletRequestParameterException missingParameter) {
+			return List.of(new FieldErrorDetail(
+				missingParameter.getParameterName(), "필수 항목입니다."));
+		}
+
+		return List.of();
 	}
 
 	/**
