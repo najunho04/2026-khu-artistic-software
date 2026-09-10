@@ -4,6 +4,7 @@ import artistic.software.khu.artistic_software_khu.auth.AuthenticatedUser;
 import artistic.software.khu.artistic_software_khu.common.ApiResponse;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -42,6 +43,21 @@ public class UserController {
 
 		return ResponseEntity.ok(ApiResponse.success(
 			userService.updateMe(authenticatedUser.userId(), request)));
+	}
+
+	/**
+	 * 회원 탈퇴. 204 로 응답하고 본문을 담지 않는다("API.md" 5장).
+	 *
+	 * 성공 응답에 공통 envelope 를 싣지 않는 이유는 204 가 "본문 없음" 을
+	 * 뜻하는 상태 코드이기 때문이다. 자녀 삭제도 같은 방식이다.
+	 */
+	@DeleteMapping("/me")
+	public ResponseEntity<Void> withdraw(
+		@AuthenticationPrincipal AuthenticatedUser authenticatedUser) {
+
+		userService.withdraw(authenticatedUser.userId());
+
+		return ResponseEntity.noContent().build();
 	}
 
 }

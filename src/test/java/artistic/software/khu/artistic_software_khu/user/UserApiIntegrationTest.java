@@ -22,11 +22,11 @@ import org.testcontainers.junit.jupiter.EnabledIfDockerAvailable;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * 유저 API. "API.md" 5장. 로드맵 6-1 중 조회와 수정만 구현한다.
+ * 유저 API. "API.md" 5장. 로드맵 6-1 중 조회와 수정을 다룬다.
  *
- * 탈퇴("DELETE /users/me")는 넣지 않는다. cascade 정책이 미확정이라
- * "무엇이 통과인지" 를 정의할 수 없기 때문이다(0-3). 무엇을 함께 지울지
- * 정하지 않은 채 만들면 자녀와 기기와 루틴이 어중간하게 남는다.
+ * 탈퇴("DELETE /users/me")는 "UserWithdrawalIntegrationTest" 에 따로 있다.
+ * 탈퇴는 계정 한 줄이 아니라 자녀 · 기기 · 루틴 · 양식까지 함께 지우는
+ * 동작이라, 조회 · 수정과 준비물이 다르다.
  *
  * "PATCH /users/me" 는 온보딩 1차(보호자 성명 입력)에서 쓰는 바로 그 API 다.
  * 별도 엔드포인트를 만들지 않는다는 로드맵 6-1 의 결정을 따른다.

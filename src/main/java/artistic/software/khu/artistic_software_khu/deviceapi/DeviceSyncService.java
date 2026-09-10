@@ -1,11 +1,13 @@
 package artistic.software.khu.artistic_software_khu.deviceapi;
 
+import artistic.software.khu.artistic_software_khu.character.CharacterService;
 import artistic.software.khu.artistic_software_khu.common.BusinessException;
 import artistic.software.khu.artistic_software_khu.common.ErrorCode;
 import artistic.software.khu.artistic_software_khu.device.Device;
 import artistic.software.khu.artistic_software_khu.device.DeviceRepository;
 import artistic.software.khu.artistic_software_khu.routine.RoutineDayResponse;
 import artistic.software.khu.artistic_software_khu.routine.RoutineService;
+import artistic.software.khu.artistic_software_khu.routine.SmallRoutine;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
@@ -37,6 +39,8 @@ public class DeviceSyncService {
 
 	private final RoutineService routineService;
 
+	private final CharacterService characterService;
+
 	private final Clock clock;
 
 	// 한 번에 받아 갈 수 있는 날짜 수. "API.md" 15장 #8 이 아직 미확정이라
@@ -50,11 +54,13 @@ public class DeviceSyncService {
 	public DeviceSyncService(
 		DeviceRepository deviceRepository,
 		RoutineService routineService,
+		CharacterService characterService,
 		Clock clock,
 		@Value("${yeso.device.max-sync-date-count:3}") int maximumSyncDateCount) {
 
 		this.deviceRepository = deviceRepository;
 		this.routineService = routineService;
+		this.characterService = characterService;
 		this.clock = clock;
 		this.maximumSyncDateCount = maximumSyncDateCount;
 	}
@@ -69,17 +75,23 @@ public class DeviceSyncService {
 		Instant now = clock.instant();
 
 		// push — 완료 기록과 기기 상태를 반영한다.
-		int accepted = routineService.applyCompletions(
+		RoutineService.CompletionResult completionResult = routineService.applyCompletions(
 			device.getChildId(), toApplications(request.completions()));
 
 		device.recordSync(request.battery(), request.firmware(), now);
+
+		// 캐릭터는 "이번에 처음 완료된" 개수만큼 자란다("API.md" 12-1).
+		// 반영한 기록 수(accepted) 를 쓰면 기기가 같은 요청을 재전송할 때마다
+		// 캐릭터가 자라서, 아이의 성장이 네트워크 상태에 좌우된다.
+		characterService.grantExperience(
+			device.getChildId(), completionResult.newlyCompleted());
 
 		// pull — 요청한 날짜의 루틴을 읽는다. push 뒤에 두어야 방금 올린
 		// 완료가 이 응답에 담긴다.
 		List<RoutineDayResponse> routines =
 			routineService.findRoutinesOn(device.getChildId(), request.dates());
 
-		return new SyncResponse(now, accepted, routines);
+		return new SyncResponse(now, completionResult.accepted(), routines);
 	}
 
 	private void validate(SyncRequest request) {
@@ -91,6 +103,34 @@ public class DeviceSyncService {
 
 		if (request.dates() != null && request.dates().size() > maximumSyncDateCount) {
 			throw new BusinessException(ErrorCode.INVALID_INPUT);
+		}
+
+		validateCompletionStatuses(request.completions());
+	}
+
+	/**
+	 * 완료 기록의 상태 값을 검사한다. "DONE" 과 "PENDING" 만 받는다.
+	 *
+	 * 모르는 값을 조용히 넘기면 안 된다. 완료 반영은 "DONE 이 아니면 전부
+	 * PENDING" 으로 처리하므로, 펌웨어의 오타 하나로 아이가 한 일이 통째로
+	 * 지워진다. 그것도 200 응답과 함께 지워져서 기기 쪽에서는 잘못된 것을
+	 * 알아챌 방법이 없다.
+	 *
+	 * 하나라도 이상하면 요청 전체를 거절한다. 이상한 것만 빼고 나머지를
+	 * 반영하면 기기와 서버의 상태가 조금씩 어긋난 채로 굳는다.
+	 */
+	private void validateCompletionStatuses(List<CompletionRecord> completions) {
+		if (completions == null) {
+			return;
+		}
+
+		for (CompletionRecord completion : completions) {
+			boolean isKnownStatus = SmallRoutine.STATUS_DONE.equals(completion.status())
+				|| SmallRoutine.STATUS_PENDING.equals(completion.status());
+
+			if (!isKnownStatus) {
+				throw new BusinessException(ErrorCode.INVALID_INPUT);
+			}
 		}
 	}
 

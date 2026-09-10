@@ -1,5 +1,6 @@
 package artistic.software.khu.artistic_software_khu.routine;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -10,6 +11,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import artistic.software.khu.artistic_software_khu.TestcontainersConfiguration;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -55,6 +58,8 @@ class RoutineApiIntegrationTest {
 
 	// 오늘보다 확실히 뒤인 날짜. 2099-01-05 는 월요일이다.
 	private static final String FUTURE_MONDAY = "2099-01-05";
+
+	private static final String FUTURE_TUESDAY = "2099-01-06";
 
 	private static final String FUTURE_WEEK_END = "2099-01-11";
 
@@ -640,8 +645,296 @@ class RoutineApiIntegrationTest {
 	}
 
 	// ------------------------------------------------------------------
+	// 미션 식별자(seriesId) 가 겹치지 않는가
+	//
+	// 스몰루틴의 seriesId 는 미션별 통계를 묶는 기준이다. 서로 다른 두 할 일이
+	// 같은 값을 가지면 통계에서 한 줄로 합쳐져, 보호자 눈에는 할 일 하나가
+	// 사라지고 다른 할 일의 숫자가 부풀어 보인다.
+	// ------------------------------------------------------------------
+
+	@Test
+	@DisplayName("할 일을 지우고 새로 추가해도 남아 있는 할 일과 미션 식별자가 겹치지 않는다")
+	void addedSmallRoutineNeverReusesSeriesIdOfAnExistingOne() throws Exception {
+		long bigRoutineId = createOneDayRoutine("아침 준비", 3);
+
+		List<JsonNode> before = smallRoutinesOn(FUTURE_MONDAY);
+		long secondSmallRoutineId = before.get(1).path("smallRoutineId").asLong();
+		String thirdSeriesId = before.get(2).path("seriesId").asText();
+		int thirdSortOrder = before.get(2).path("sortOrder").asInt();
+
+		mockMvc.perform(delete("/api/v1/small-routines/" + secondSmallRoutineId)
+				.header(APP_HEADER, ownerUuid))
+			.andExpect(status().isNoContent());
+
+		String addedBody = mockMvc.perform(
+			post("/api/v1/big-routines/" + bigRoutineId + "/small-routines")
+				.header(APP_HEADER, ownerUuid)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{"title": "책읽기"}"""))
+			.andExpect(status().isCreated())
+			.andReturn().getResponse().getContentAsString();
+
+		JsonNode added = objectMapper.readTree(addedBody).path("data");
+
+		// 지운 자리의 번호를 다시 쓰면 살아 있는 세 번째 할 일과 같은 값이 된다.
+		assertThat(added.path("seriesId").asText()).isNotEqualTo(thirdSeriesId);
+		assertThat(added.path("sortOrder").asInt()).isNotEqualTo(thirdSortOrder);
+
+		// 캘린더에서도 겹치는 값이 없어야 한다.
+		List<String> seriesIds = smallRoutinesOn(FUTURE_MONDAY).stream()
+			.map(smallRoutine -> smallRoutine.path("seriesId").asText())
+			.toList();
+
+		assertThat(seriesIds).doesNotHaveDuplicates();
+	}
+
+	@Test
+	@DisplayName("한 날짜에서만 지운 뒤 시리즈 전체에 할 일을 더해도 식별자가 겹치지 않는다")
+	void addingAcrossSeriesNeverCollidesWithSiblingsThatWereNotTouched() throws Exception {
+		// 할 일 삭제는 그 날짜 하나만 지운다. 그래서 날짜마다 살아 있는 개수가
+		// 달라지고, 개수로 다음 번호를 정하면 손대지 않은 날짜의 할 일과 겹친다.
+		createRoutineWithSmallRoutines("아침 준비", FUTURE_MONDAY, FUTURE_TUESDAY, 3);
+
+		long secondOnMonday = smallRoutinesOn(FUTURE_MONDAY).get(1).path("smallRoutineId").asLong();
+
+		mockMvc.perform(delete("/api/v1/small-routines/" + secondOnMonday)
+				.header(APP_HEADER, ownerUuid))
+			.andExpect(status().isNoContent());
+
+		mockMvc.perform(post("/api/v1/big-routines/" + firstBigRoutineIdOn(FUTURE_MONDAY)
+				+ "/small-routines")
+				.header(APP_HEADER, ownerUuid)
+				.param("scope", "series")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{"title": "책읽기"}"""))
+			.andExpect(status().isCreated());
+
+		List<String> tuesdaySeriesIds = smallRoutinesOn(FUTURE_TUESDAY).stream()
+			.map(smallRoutine -> smallRoutine.path("seriesId").asText())
+			.toList();
+
+		assertThat(tuesdaySeriesIds).doesNotHaveDuplicates();
+
+		List<Integer> tuesdaySortOrders = smallRoutinesOn(FUTURE_TUESDAY).stream()
+			.map(smallRoutine -> smallRoutine.path("sortOrder").asInt())
+			.toList();
+
+		assertThat(tuesdaySortOrders).doesNotHaveDuplicates();
+	}
+
+	@Test
+	@DisplayName("같은 시리즈의 여러 날짜에서 같은 순서의 할 일은 여전히 같은 미션이다")
+	void sameMissionAcrossDatesStillSharesOneSeriesId() throws Exception {
+		// 이것이 깨지면 "양치하기" 의 이행률을 날짜에 걸쳐 모을 수 없다.
+		createRoutineWithSmallRoutines("아침 준비", FUTURE_MONDAY, FUTURE_TUESDAY, 2);
+
+		List<JsonNode> monday = smallRoutinesOn(FUTURE_MONDAY);
+		List<JsonNode> tuesday = smallRoutinesOn(FUTURE_TUESDAY);
+
+		assertThat(monday.get(0).path("seriesId").asText())
+			.isEqualTo(tuesday.get(0).path("seriesId").asText());
+		assertThat(monday.get(1).path("seriesId").asText())
+			.isEqualTo(tuesday.get(1).path("seriesId").asText());
+	}
+
+	// ------------------------------------------------------------------
+	// 순서
+	//
+	// 두 가지다. 하루 안에서 빅루틴을 어떤 차례로 보여줄지, 그리고 빅루틴
+	// 안의 할 일을 어떤 차례로 보여줄지.
+	// ------------------------------------------------------------------
+
+	@Test
+	@DisplayName("하루 안의 빅루틴은 시작 시각이 이른 것부터 나온다")
+	void bigRoutinesOfOneDayAreOrderedByStartTime() throws Exception {
+		// 저녁 것을 먼저 만들어도 아침 것이 앞에 와야 한다. 아이가 하루를
+		// 보내는 차례와 화면에 보이는 차례가 같아야 하기 때문이다.
+		createRoutineAt("저녁 준비", "19:00", "20:00", FUTURE_MONDAY);
+		createRoutineAt("아침 준비", "07:00", "08:00", FUTURE_MONDAY);
+
+		JsonNode bigRoutines = bigRoutinesOn(FUTURE_MONDAY);
+
+		assertThat(bigRoutines.get(0).path("title").asText()).isEqualTo("아침 준비");
+		assertThat(bigRoutines.get(0).path("sortOrder").asInt()).isEqualTo(1);
+		assertThat(bigRoutines.get(1).path("title").asText()).isEqualTo("저녁 준비");
+		assertThat(bigRoutines.get(1).path("sortOrder").asInt()).isEqualTo(2);
+	}
+
+	@Test
+	@DisplayName("시작 시각을 고치면 순서도 따라 바뀐다")
+	void changingStartTimeChangesTheOrder() throws Exception {
+		createRoutineAt("아침 준비", "07:00", "08:00", FUTURE_MONDAY);
+		createRoutineAt("저녁 준비", "19:00", "20:00", FUTURE_MONDAY);
+
+		long eveningId = bigRoutinesOn(FUTURE_MONDAY).get(1).path("bigRoutineId").asLong();
+
+		mockMvc.perform(patch("/api/v1/big-routines/" + eveningId)
+				.header(APP_HEADER, ownerUuid)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{"startTime": "06:00", "endTime": "06:30"}"""))
+			.andExpect(status().isOk());
+
+		// 순서를 저장해 두지 않고 조회할 때 계산하므로 저절로 맞아떨어진다.
+		assertThat(bigRoutinesOn(FUTURE_MONDAY).get(0).path("title").asText())
+			.isEqualTo("저녁 준비");
+	}
+
+	@Test
+	@DisplayName("시작 시각이 같으면 먼저 만든 것이 앞에 온다")
+	void sameStartTimeFallsBackToCreationOrder() throws Exception {
+		createRoutineAt("먼저 만든 것", "07:00", "08:00", FUTURE_MONDAY);
+		createRoutineAt("나중에 만든 것", "07:00", "08:00", FUTURE_MONDAY);
+
+		JsonNode bigRoutines = bigRoutinesOn(FUTURE_MONDAY);
+
+		assertThat(bigRoutines.get(0).path("title").asText()).isEqualTo("먼저 만든 것");
+		assertThat(bigRoutines.get(1).path("title").asText()).isEqualTo("나중에 만든 것");
+	}
+
+	@Test
+	@DisplayName("요청에 적은 할 일 순서(order)를 그대로 따른다")
+	void requestedSmallRoutineOrderIsHonoured() throws Exception {
+		mockMvc.perform(createRoutine("""
+			{
+			  "title": "아침 준비",
+			  "startTime": "07:30",
+			  "endTime": "08:30",
+			  "repeatType": "RANGE",
+			  "startDate": "%s",
+			  "endDate": "%s",
+			  "smallRoutines": [
+			    {"title": "둘째", "order": 2},
+			    {"title": "첫째", "order": 1}
+			  ]
+			}""".formatted(FUTURE_MONDAY, FUTURE_MONDAY)))
+			.andExpect(status().isCreated());
+
+		List<JsonNode> smallRoutines = smallRoutinesOn(FUTURE_MONDAY);
+
+		assertThat(smallRoutines.get(0).path("title").asText()).isEqualTo("첫째");
+		assertThat(smallRoutines.get(0).path("sortOrder").asInt()).isEqualTo(1);
+		assertThat(smallRoutines.get(1).path("title").asText()).isEqualTo("둘째");
+		assertThat(smallRoutines.get(1).path("sortOrder").asInt()).isEqualTo(2);
+	}
+
+	@Test
+	@DisplayName("order 를 적지 않으면 보낸 배열 차례를 쓴다")
+	void arrayOrderIsUsedWhenOrderIsAbsent() throws Exception {
+		createOneDayRoutine("아침 준비", 3);
+
+		List<JsonNode> smallRoutines = smallRoutinesOn(FUTURE_MONDAY);
+
+		assertThat(smallRoutines.get(0).path("title").asText()).isEqualTo("할일1");
+		assertThat(smallRoutines.get(2).path("title").asText()).isEqualTo("할일3");
+	}
+
+	@Test
+	@DisplayName("양식에 저장해둔 할 일 순서가 루틴에도 그대로 옮겨진다")
+	void templateSmallRoutineOrderSurvivesMaterialisation() throws Exception {
+		// 양식은 "저장해둔 값을 그대로 꺼내 쓰는" 것이므로 순서까지 같아야 한다.
+		String body = mockMvc.perform(post("/api/v1/children/" + childId + "/routine-templates")
+				.header(APP_HEADER, ownerUuid)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{
+					  "title": "저녁 양식",
+					  "startTime": "19:00",
+					  "endTime": "20:00",
+					  "smallRoutines": [
+					    {"title": "둘째", "order": 2},
+					    {"title": "첫째", "order": 1}
+					  ]
+					}"""))
+			.andExpect(status().isCreated())
+			.andReturn().getResponse().getContentAsString();
+
+		long templateId = objectMapper.readTree(body).path("data").path("templateId").asLong();
+
+		mockMvc.perform(createRoutine("""
+			{
+			  "templateId": %d,
+			  "repeatType": "RANGE",
+			  "startDate": "%s",
+			  "endDate": "%s"
+			}""".formatted(templateId, FUTURE_MONDAY, FUTURE_MONDAY)))
+			.andExpect(status().isCreated());
+
+		List<JsonNode> smallRoutines = smallRoutinesOn(FUTURE_MONDAY);
+
+		assertThat(smallRoutines.get(0).path("title").asText()).isEqualTo("첫째");
+		assertThat(smallRoutines.get(1).path("title").asText()).isEqualTo("둘째");
+	}
+
+	// ------------------------------------------------------------------
 	// 도우미
 	// ------------------------------------------------------------------
+
+	/** 지정한 기간에 할 일 여러 개짜리 루틴을 만든다. */
+	private void createRoutineWithSmallRoutines(
+		String title, String startDate, String endDate, int smallRoutineCount) throws Exception {
+
+		StringBuilder smallRoutines = new StringBuilder();
+
+		for (int index = 1; index <= smallRoutineCount; index++) {
+			smallRoutines.append("{\"title\": \"할일%d\"}".formatted(index));
+			if (index < smallRoutineCount) {
+				smallRoutines.append(", ");
+			}
+		}
+
+		mockMvc.perform(createRoutine("""
+			{
+			  "title": "%s",
+			  "startTime": "07:30",
+			  "endTime": "08:30",
+			  "repeatType": "RANGE",
+			  "startDate": "%s",
+			  "endDate": "%s",
+			  "smallRoutines": [%s]
+			}""".formatted(title, startDate, endDate, smallRoutines)))
+			.andExpect(status().isCreated());
+	}
+
+	/** 지정한 시각으로 하루짜리 루틴을 만든다. */
+	private void createRoutineAt(String title, String startTime, String endTime, String date)
+		throws Exception {
+
+		mockMvc.perform(createRoutine("""
+			{
+			  "title": "%s",
+			  "startTime": "%s",
+			  "endTime": "%s",
+			  "repeatType": "RANGE",
+			  "startDate": "%s",
+			  "endDate": "%s",
+			  "smallRoutines": [{"title": "할일"}]
+			}""".formatted(title, startTime, endTime, date, date)))
+			.andExpect(status().isCreated());
+	}
+
+	/** 그 날짜의 빅루틴 목록을 캘린더에서 읽어 온다. */
+	private JsonNode bigRoutinesOn(String date) throws Exception {
+		String body = mockMvc.perform(calendarRequest(date, date))
+			.andReturn().getResponse().getContentAsString();
+
+		return objectMapper.readTree(body).path("data").get(0).path("bigRoutines");
+	}
+
+	/** 그 날짜 첫 빅루틴의 할 일 목록을 캘린더에서 읽어 온다. */
+	private List<JsonNode> smallRoutinesOn(String date) throws Exception {
+		String body = mockMvc.perform(calendarRequest(date, date))
+			.andReturn().getResponse().getContentAsString();
+
+		List<JsonNode> smallRoutines = new ArrayList<>();
+
+		objectMapper.readTree(body).path("data").get(0).path("bigRoutines").get(0)
+			.path("smallRoutines").forEach(smallRoutines::add);
+
+		return smallRoutines;
+	}
 
 	private String signUp(String email) throws Exception {
 		String body = mockMvc.perform(post("/api/v1/auth/signup")

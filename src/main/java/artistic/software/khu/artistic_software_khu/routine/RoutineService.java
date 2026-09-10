@@ -145,7 +145,7 @@ public class RoutineService {
 
 		int order = 1;
 
-		for (SmallRoutineRequest request : requests) {
+		for (SmallRoutineRequest request : sortByRequestedOrder(requests)) {
 			// 스몰루틴의 seriesId 는 빅루틴과 별개로 발급한다. "양치하기 미션"
 			// 하나의 이행률을 날짜에 걸쳐 모으려면 그 할 일만의 식별자가 필요하다.
 			//
@@ -159,6 +159,43 @@ public class RoutineService {
 
 			order++;
 		}
+	}
+
+	/**
+	 * 요청에 적힌 순서(order) 대로 할 일을 줄 세운다.
+	 *
+	 * 앱이 보낸 배열 차례를 그대로 쓰면 "order" 필드가 죽은 값이 된다.
+	 * 특히 양식은 저장해둔 값을 그대로 꺼내 쓰는 것이라, 저장할 때 매겨둔
+	 * 순서가 무시되면 사용자가 정한 차례가 뒤집힌 채로 루틴이 만들어진다.
+	 *
+	 * "order" 를 적지 않은 항목은 뒤로 보내고 보낸 배열 차례를 지킨다.
+	 * 값을 매기지 않았다는 것은 "그냥 보낸 대로" 라는 뜻이기 때문이다.
+	 * 실제로 저장하는 값은 여기서 정한 차례에 따라 1, 2, 3 을 다시 매긴다.
+	 * 요청의 숫자를 그대로 쓰면 1, 5, 9 처럼 구멍 뚫린 값이 저장되고,
+	 * 그 값이 미션 식별자 계산에 쓰이므로 나중에 겹칠 여지가 생긴다.
+	 */
+	private List<SmallRoutineRequest> sortByRequestedOrder(List<SmallRoutineRequest> requests) {
+		return requests.stream()
+			.sorted(Comparator.comparing(
+				SmallRoutineRequest::order, Comparator.nullsLast(Comparator.naturalOrder())))
+			.toList();
+	}
+
+	/**
+	 * 할 일을 새로 더할 때 쓸 순서 값을 정한다. 지금까지 쓴 가장 큰 값 + 1 이다.
+	 *
+	 * "살아 있는 할 일 개수 + 1" 을 쓰면 안 된다. 할 일을 지운 뒤 새로 더하면
+	 * 지운 자리의 번호가 다시 나오고, 스몰루틴의 시리즈 값이 순서에서 나오므로
+	 * 그 자리에 있던 미션과 같은 식별자가 만들어진다. 그러면 미션별 통계에서
+	 * 서로 다른 두 할 일이 한 줄로 합쳐져, 보호자 눈에는 할 일 하나가 사라지고
+	 * 다른 할 일의 숫자가 부풀어 보인다.
+	 */
+	private int nextSmallRoutineOrder(BigRoutine bigRoutine) {
+		Integer maximumOrder = (bigRoutine.getSeriesId() == null)
+			? smallRoutineRepository.findMaximumSortOrderByBigRoutineId(bigRoutine.getId())
+			: smallRoutineRepository.findMaximumSortOrderBySeriesId(bigRoutine.getSeriesId());
+
+		return (maximumOrder == null) ? 1 : maximumOrder + 1;
 	}
 
 	/**
@@ -262,15 +299,8 @@ public class RoutineService {
 		Map<Long, List<SmallRoutine>> smallRoutinesByBigRoutineId =
 			loadSmallRoutines(bigRoutines);
 
-		// 날짜별로 묶는다. 순서를 지키려고 LinkedHashMap 을 쓴다.
-		Map<LocalDate, List<BigRoutineResponse>> byDate = new LinkedHashMap<>();
-
-		for (BigRoutine bigRoutine : bigRoutines) {
-			byDate.computeIfAbsent(bigRoutine.getRoutineDate(), date -> new ArrayList<>())
-				.add(BigRoutineResponse.of(
-					bigRoutine,
-					smallRoutinesByBigRoutineId.getOrDefault(bigRoutine.getId(), List.of())));
-		}
+		Map<LocalDate, List<BigRoutineResponse>> byDate =
+			groupByDate(bigRoutines, smallRoutinesByBigRoutineId);
 
 		return byDate.entrySet().stream()
 			.map(entry -> CalendarDayResponse.of(entry.getKey(), entry.getValue()))
@@ -299,14 +329,8 @@ public class RoutineService {
 
 		Map<Long, List<SmallRoutine>> smallRoutinesByBigRoutineId = loadSmallRoutines(bigRoutines);
 
-		Map<LocalDate, List<BigRoutineResponse>> byDate = new LinkedHashMap<>();
-
-		for (BigRoutine bigRoutine : bigRoutines) {
-			byDate.computeIfAbsent(bigRoutine.getRoutineDate(), date -> new ArrayList<>())
-				.add(BigRoutineResponse.of(
-					bigRoutine,
-					smallRoutinesByBigRoutineId.getOrDefault(bigRoutine.getId(), List.of())));
-		}
+		Map<LocalDate, List<BigRoutineResponse>> byDate =
+			groupByDate(bigRoutines, smallRoutinesByBigRoutineId);
 
 		return byDate.entrySet().stream()
 			.map(entry -> new RoutineDayResponse(entry.getKey(), entry.getValue()))
@@ -327,12 +351,19 @@ public class RoutineService {
 	 * @return 실제로 반영된 개수
 	 */
 	@Transactional
-	public int applyCompletions(Long childId, List<CompletionApplication> completions) {
+	public CompletionResult applyCompletions(
+		Long childId, List<CompletionApplication> completions) {
+
 		if (completions == null || completions.isEmpty()) {
-			return 0;
+			return new CompletionResult(0, 0);
 		}
 
 		int accepted = 0;
+
+		// "이미 DONE 이던 할 일" 과 "이번에 DONE 이 된 할 일" 을 나눠 센다.
+		// 캐릭터 경험치가 뒤의 숫자로 계산되기 때문이다. 앞의 숫자를 쓰면
+		// 기기가 같은 기록을 재전송할 때마다 캐릭터가 자란다.
+		int newlyCompleted = 0;
 
 		for (CompletionApplication completion : completions) {
 			if (completion.smallRoutineId() == null) {
@@ -357,11 +388,27 @@ public class RoutineService {
 				continue;
 			}
 
+			boolean wasDone = SmallRoutine.STATUS_DONE.equals(smallRoutine.getStatus());
+			boolean becomesDone = SmallRoutine.STATUS_DONE.equals(completion.status());
+
 			smallRoutine.applyCompletion(completion.status(), completion.completedAt());
 			accepted++;
+
+			if (becomesDone && !wasDone) {
+				newlyCompleted++;
+			}
 		}
 
-		return accepted;
+		return new CompletionResult(accepted, newlyCompleted);
+	}
+
+	/**
+	 * 완료 반영의 결과.
+	 *
+	 * @param accepted       실제로 반영한 기록 수. 기기 응답의 accepted 다
+	 * @param newlyCompleted 이번에 처음 DONE 이 된 할 일 수. 캐릭터 경험치의 근거다
+	 */
+	public record CompletionResult(int accepted, int newlyCompleted) {
 	}
 
 	/**
@@ -372,6 +419,80 @@ public class RoutineService {
 	 */
 	public record CompletionApplication(
 		Long smallRoutineId, String status, java.time.Instant completedAt) {
+	}
+
+	/**
+	 * 빅루틴을 날짜별로 묶고, 하루 안에서 시작 시각이 이른 것부터 순서를 매긴다.
+	 *
+	 * 순서를 DB 에 저장하지 않고 여기서 계산하는 이유는, 저장해 두면 나중에
+	 * 시각을 고쳤을 때 순서가 시각과 어긋나기 때문이다. 그것을 맞추려면 같은
+	 * 날짜의 다른 행까지 함께 고쳐야 하는데, 조회할 때 세는 편이 훨씬 싸다.
+	 * 하루에 빅루틴은 많아야 몇 개다.
+	 *
+	 * 시작 시각이 비어 있는 루틴은 뒤로 보낸다. 시각이 같으면 먼저 만든 것이
+	 * 앞이다. 어느 쪽이든 같은 입력에 항상 같은 차례가 나와야 앱과 기기가
+	 * 같은 화면을 보여준다.
+	 */
+	private Map<LocalDate, List<BigRoutineResponse>> groupByDate(
+		List<BigRoutine> bigRoutines,
+		Map<Long, List<SmallRoutine>> smallRoutinesByBigRoutineId) {
+
+		Map<LocalDate, List<BigRoutine>> entitiesByDate = new LinkedHashMap<>();
+
+		for (BigRoutine bigRoutine : bigRoutines) {
+			entitiesByDate
+				.computeIfAbsent(bigRoutine.getRoutineDate(), date -> new ArrayList<>())
+				.add(bigRoutine);
+		}
+
+		Map<LocalDate, List<BigRoutineResponse>> byDate = new LinkedHashMap<>();
+
+		for (Map.Entry<LocalDate, List<BigRoutine>> entry : entitiesByDate.entrySet()) {
+			List<BigRoutine> ordered = sortByStartTime(entry.getValue());
+			List<BigRoutineResponse> responses = new ArrayList<>();
+
+			for (int index = 0; index < ordered.size(); index++) {
+				BigRoutine bigRoutine = ordered.get(index);
+
+				responses.add(BigRoutineResponse.of(
+					bigRoutine,
+					smallRoutinesByBigRoutineId.getOrDefault(bigRoutine.getId(), List.of()),
+					index + 1));
+			}
+
+			byDate.put(entry.getKey(), responses);
+		}
+
+		return byDate;
+	}
+
+	/**
+	 * 빅루틴 하나가 그 날짜에서 몇 번째인지 센다. 단건 응답에서 쓴다.
+	 *
+	 * 목록 응답과 같은 규칙을 써야 한다. 수정 응답에 적힌 순서와 곧이어
+	 * 캘린더를 다시 불렀을 때의 순서가 다르면 앱이 어느 쪽을 믿어야 할지 모른다.
+	 */
+	private Integer positionInDay(BigRoutine bigRoutine) {
+		List<BigRoutine> sameDay = sortByStartTime(bigRoutineRepository
+			.findAllByChildIdAndRoutineDateBetweenAndDeletedAtIsNullOrderByRoutineDateAscIdAsc(
+				bigRoutine.getChildId(), bigRoutine.getRoutineDate(), bigRoutine.getRoutineDate()));
+
+		for (int index = 0; index < sameDay.size(); index++) {
+			if (sameDay.get(index).getId().equals(bigRoutine.getId())) {
+				return index + 1;
+			}
+		}
+
+		return null;
+	}
+
+	/** 시작 시각 오름차순. 비어 있으면 뒤로, 같으면 먼저 만든 것이 앞이다. */
+	private List<BigRoutine> sortByStartTime(List<BigRoutine> bigRoutines) {
+		return bigRoutines.stream()
+			.sorted(Comparator
+				.comparing(BigRoutine::getStartTime, Comparator.nullsLast(Comparator.naturalOrder()))
+				.thenComparing(BigRoutine::getId))
+			.toList();
 	}
 
 	/**
@@ -414,7 +535,8 @@ public class RoutineService {
 		// 고치는 중이므로, 그것까지 막으면 오타 하나를 영영 못 고친다.
 		bigRoutine.update(request.title(), request.startTime(), request.endTime());
 
-		return BigRoutineResponse.of(bigRoutine, findSmallRoutines(bigRoutineId));
+		return BigRoutineResponse.of(
+			bigRoutine, findSmallRoutines(bigRoutineId), positionInDay(bigRoutine));
 	}
 
 	@Transactional
@@ -446,7 +568,7 @@ public class RoutineService {
 			throw new BusinessException(ErrorCode.INVALID_INPUT);
 		}
 
-		int nextOrder = findSmallRoutines(bigRoutineId).size() + 1;
+		int nextOrder = nextSmallRoutineOrder(bigRoutine);
 		UUID seriesId = deriveSmallRoutineSeriesId(bigRoutine.getSeriesId(), nextOrder);
 
 		// 과거 날짜에는 더하지 않는다. 할 일 개수가 늘면 그 날의 이행률
