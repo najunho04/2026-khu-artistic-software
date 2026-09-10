@@ -367,9 +367,47 @@ class RoutineApiIntegrationTest {
 				.header(APP_HEADER, ownerUuid)
 				.contentType(MediaType.APPLICATION_JSON)
 				.content("""
-					{"smallRoutineIds": [%d]}""".formatted(firstSmallRoutineId)))
+					[{"smallRoutineId": %d, "order": 1}]""".formatted(firstSmallRoutineId)))
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.error.code").value("ROUTINE_ORDER_MISMATCH"));
+	}
+
+	@Test
+	@DisplayName("보낸 order 대로 순서가 다시 매겨진다")
+	void reorderAppliesRequestedOrder() throws Exception {
+		long bigRoutineId = createOneDayRoutine("아침 준비", 3);
+
+		List<Long> ids = smallRoutineIdsOn(FUTURE_MONDAY);
+
+		// "API.md" 9장의 요청 형태다. 최상위가 배열이고 원소마다
+		// smallRoutineId 와 order 를 담는다. 배열에 담긴 차례가 아니라
+		// order 값이 순서를 정한다. 앱의 드래그 정렬이 화면에서 옮긴 결과를
+		// 그대로 숫자로 적어 보내기 때문이다.
+		String body = """
+			[
+			  {"smallRoutineId": %d, "order": 3},
+			  {"smallRoutineId": %d, "order": 1},
+			  {"smallRoutineId": %d, "order": 2}
+			]""".formatted(ids.get(0), ids.get(1), ids.get(2));
+
+		mockMvc.perform(put("/api/v1/big-routines/" + bigRoutineId + "/small-routines/order")
+				.header(APP_HEADER, ownerUuid)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(body))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.data.length()").value(3))
+			.andExpect(jsonPath("$.data[0].smallRoutineId").value(ids.get(1)))
+			.andExpect(jsonPath("$.data[0].sortOrder").value(1))
+			.andExpect(jsonPath("$.data[1].smallRoutineId").value(ids.get(2)))
+			.andExpect(jsonPath("$.data[1].sortOrder").value(2))
+			.andExpect(jsonPath("$.data[2].smallRoutineId").value(ids.get(0)))
+			.andExpect(jsonPath("$.data[2].sortOrder").value(3));
+
+		// 다시 조회해도 같은 차례여야 한다. 응답에만 반영되고 저장되지
+		// 않으면 화면을 다시 들어갔을 때 원래대로 돌아간다.
+		mockMvc.perform(calendarRequest(FUTURE_MONDAY, FUTURE_MONDAY))
+			.andExpect(jsonPath("$.data[0].bigRoutines[0].smallRoutines[0].smallRoutineId")
+				.value(ids.get(1)));
 	}
 
 	// ------------------------------------------------------------------
@@ -1028,6 +1066,23 @@ class RoutineApiIntegrationTest {
 		JsonNode root = objectMapper.readTree(body);
 		return root.path("data").get(0).path("bigRoutines").get(0)
 			.path("smallRoutines").get(0).path("smallRoutineId").asLong();
+	}
+
+	/** 그 날짜의 첫 빅루틴에 달린 할 일 id 를 저장된 순서대로 모두 읽는다. */
+	private List<Long> smallRoutineIdsOn(String date) throws Exception {
+		String body = mockMvc.perform(calendarRequest(date, date))
+			.andReturn().getResponse().getContentAsString();
+
+		JsonNode smallRoutines = objectMapper.readTree(body)
+			.path("data").get(0).path("bigRoutines").get(0).path("smallRoutines");
+
+		List<Long> ids = new java.util.ArrayList<>();
+
+		for (JsonNode smallRoutine : smallRoutines) {
+			ids.add(smallRoutine.path("smallRoutineId").asLong());
+		}
+
+		return ids;
 	}
 
 	private long saveTemplate(String title) throws Exception {

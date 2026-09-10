@@ -93,14 +93,18 @@ public class RoutineController {
 		return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.success(response));
 	}
 
+	/**
+	 * 순서 변경만 요청 본문의 최상위가 배열이다. "API.md" 9장이 정한 형태이며,
+	 * 응답은 다른 엔드포인트와 똑같이 공통 envelope 로 감싼다.
+	 */
 	@PutMapping("/big-routines/{bigRoutineId}/small-routines/order")
 	public ResponseEntity<ApiResponse<List<SmallRoutineResponse>>> reorder(
 		@AuthenticationPrincipal AuthenticatedUser authenticatedUser,
 		@PathVariable Long bigRoutineId,
-		@RequestBody SmallRoutineOrderRequest request) {
+		@RequestBody List<SmallRoutineOrderRequest> requests) {
 
 		return ResponseEntity.ok(ApiResponse.success(routineService.reorderSmallRoutines(
-			authenticatedUser.userId(), bigRoutineId, request.smallRoutineIds())));
+			authenticatedUser.userId(), bigRoutineId, requests)));
 	}
 
 	@PatchMapping("/small-routines/{smallRoutineId}")

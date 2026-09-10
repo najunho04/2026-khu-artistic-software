@@ -99,6 +99,13 @@ public class UserService {
 		List<Child> children = childRepository.findAllByUserIdAndDeletedAtIsNullOrderByIdAsc(userId);
 
 		for (Child child : children) {
+			// 자녀 행을 먼저 잠근다. 기기 동기화도 "자녀 → 루틴" 순서로
+			// 잠그므로 순서를 맞춰야 한다. 반대로 가면 탈퇴가 할 일 행을
+			// 쥔 채 자녀 행을 기다리고, 동기화는 자녀 행을 쥔 채 할 일 행을
+			// 기다려 둘 다 멈춘다(교착 상태). DB 가 한쪽을 강제로 끊어
+			// 사용자에게는 500 으로 보인다.
+			childRepository.findByIdAndDeletedAtIsNullForUpdate(child.getId());
+
 			// 스몰루틴을 빅루틴보다 먼저 지운다. 스몰루틴을 찾는 조회가
 			// 빅루틴 테이블을 거쳐 가는데, 순서가 반대면 "이미 지운 빅루틴에
 			// 매달린 할 일" 이라는 상태를 한 번 거치게 된다. 지금 쿼리는 그

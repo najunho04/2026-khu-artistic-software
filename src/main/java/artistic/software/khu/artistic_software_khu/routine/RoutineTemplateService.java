@@ -1,6 +1,8 @@
 package artistic.software.khu.artistic_software_khu.routine;
 
 import artistic.software.khu.artistic_software_khu.child.ChildService;
+import artistic.software.khu.artistic_software_khu.common.BusinessException;
+import artistic.software.khu.artistic_software_khu.common.ErrorCode;
 import java.time.Clock;
 import java.util.List;
 import org.springframework.stereotype.Service;
@@ -43,6 +45,13 @@ public class RoutineTemplateService {
 		Long userId, Long childId, RoutineTemplateRequest request) {
 
 		childService.findOwnedChild(userId, childId);
+
+		// 제목이 없으면 DB 의 not null 제약에 걸려 500 이 된다. 그 전에
+		// 400 으로 돌려줘야 앱이 무엇을 고쳐야 하는지 알 수 있다.
+		// 무엇을 저장한 양식인지 제목 없이는 목록에서 고를 수도 없다.
+		if (request.title() == null || request.title().isBlank()) {
+			throw new BusinessException(ErrorCode.INVALID_INPUT);
+		}
 
 		RoutineTemplate template = RoutineTemplate.save(
 			childId, request.title(), request.startTime(), request.endTime(),
@@ -89,10 +98,7 @@ public class RoutineTemplateService {
 	 */
 	RoutineTemplate findOwnedTemplate(Long userId, Long templateId) {
 		RoutineTemplate template = routineTemplateRepository.findByIdAndDeletedAtIsNull(templateId)
-			.orElseThrow(() -> new artistic.software.khu.artistic_software_khu.common
-				.BusinessException(
-				artistic.software.khu.artistic_software_khu.common.ErrorCode
-					.ROUTINE_TEMPLATE_NOT_FOUND));
+			.orElseThrow(() -> new BusinessException(ErrorCode.ROUTINE_TEMPLATE_NOT_FOUND));
 
 		// 경로에 자녀 id 가 없어도 양식에서 자녀를 거슬러 올라가 확인한다.
 		childService.findOwnedChild(userId, template.getChildId());

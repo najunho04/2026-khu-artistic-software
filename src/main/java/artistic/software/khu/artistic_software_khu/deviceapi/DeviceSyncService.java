@@ -1,6 +1,7 @@
 package artistic.software.khu.artistic_software_khu.deviceapi;
 
 import artistic.software.khu.artistic_software_khu.character.CharacterService;
+import artistic.software.khu.artistic_software_khu.child.ChildService;
 import artistic.software.khu.artistic_software_khu.common.BusinessException;
 import artistic.software.khu.artistic_software_khu.common.ErrorCode;
 import artistic.software.khu.artistic_software_khu.device.Device;
@@ -41,6 +42,8 @@ public class DeviceSyncService {
 
 	private final CharacterService characterService;
 
+	private final ChildService childService;
+
 	private final Clock clock;
 
 	// 한 번에 받아 갈 수 있는 날짜 수. "API.md" 15장 #8 이 아직 미확정이라
@@ -55,12 +58,14 @@ public class DeviceSyncService {
 		DeviceRepository deviceRepository,
 		RoutineService routineService,
 		CharacterService characterService,
+		ChildService childService,
 		Clock clock,
 		@Value("${yeso.device.max-sync-date-count:3}") int maximumSyncDateCount) {
 
 		this.deviceRepository = deviceRepository;
 		this.routineService = routineService;
 		this.characterService = characterService;
+		this.childService = childService;
 		this.clock = clock;
 		this.maximumSyncDateCount = maximumSyncDateCount;
 	}
@@ -71,6 +76,13 @@ public class DeviceSyncService {
 
 		Device device = deviceRepository.findByIdAndDeletedAtIsNull(deviceId)
 			.orElseThrow(() -> new BusinessException(ErrorCode.DEVICE_UNAUTHORIZED));
+
+		// 같은 자녀에게 동시에 들어온 동기화를 한 줄로 세운다. 기기는 응답을
+		// 못 받으면 같은 요청을 다시 보내는데, 앞의 요청이 죽은 것이 아니라
+		// 늦게 도착하는 중일 수 있다. 잠그지 않으면 두 요청이 같은 완료
+		// 기록을 각각 "이번에 처음 완료됐다" 로 세어 캐릭터 경험치가 두 번
+		// 오르고, 보유 캐릭터가 없던 자녀에게는 첫 캐릭터가 두 마리 지급된다.
+		childService.lockChild(device.getChildId());
 
 		Instant now = clock.instant();
 
@@ -95,13 +107,24 @@ public class DeviceSyncService {
 	}
 
 	private void validate(SyncRequest request) {
-		if (request.battery() != null
-			&& (request.battery() < MINIMUM_BATTERY || request.battery() > MAXIMUM_BATTERY)) {
+		// "API.md" 8장이 네 항목을 모두 필수로 두었다. 빠진 채로 200 을
+		// 돌려주면 기기는 반영됐다고 믿는데 서버는 아무것도 하지 않은 상태로
+		// 갈라진다. 특히 dates 가 빠지면 루틴을 한 줄도 받지 못하면서 오류도
+		// 뜨지 않아, 기기 화면이 왜 비어 있는지 알아낼 방법이 없다.
+		// 완료 기록이 없는 경우는 null 이 아니라 "빈 배열" 로 보낸다.
+		if (request.battery() == null
+			|| request.firmware() == null
+			|| request.completions() == null
+			|| request.dates() == null) {
 
 			throw new BusinessException(ErrorCode.INVALID_INPUT);
 		}
 
-		if (request.dates() != null && request.dates().size() > maximumSyncDateCount) {
+		if (request.battery() < MINIMUM_BATTERY || request.battery() > MAXIMUM_BATTERY) {
+			throw new BusinessException(ErrorCode.INVALID_INPUT);
+		}
+
+		if (request.dates().size() > maximumSyncDateCount) {
 			throw new BusinessException(ErrorCode.INVALID_INPUT);
 		}
 
