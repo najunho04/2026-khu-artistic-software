@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -27,6 +28,34 @@ public interface SmallRoutineRepository extends JpaRepository<SmallRoutine, Long
 	 */
 	List<SmallRoutine> findAllByBigRoutineIdInAndDeletedAtIsNullOrderBySortOrderAscIdAsc(
 		Collection<Long> bigRoutineIds);
+
+	/**
+	 * 한 시리즈 안에서 지금까지 쓴 가장 큰 순서 값을 구한다.
+	 *
+	 * 지운 할 일도 함께 센다("deletedAt is null" 조건이 없다). 이것이 이
+	 * 질의의 요점이다. 스몰루틴의 seriesId 는 "빅루틴 시리즈 + 순서" 로
+	 * 계산되므로, 지운 할 일의 번호를 다시 쓰면 그 자리에 있던 미션과 같은
+	 * 식별자가 만들어져 미션별 통계가 한 줄로 합쳐진다.
+	 *
+	 * 한 날짜가 아니라 시리즈 전체에서 구하는 이유는, 할 일 삭제가 그 날짜
+	 * 하나만 지우기 때문이다. 날짜마다 살아 있는 개수가 달라지므로 한 날짜만
+	 * 보고 번호를 정하면 손대지 않은 날짜의 할 일과 겹친다.
+	 */
+	@Query("select max(smallRoutine.sortOrder) from SmallRoutine smallRoutine"
+		+ " where smallRoutine.bigRoutineId in"
+		+ " (select bigRoutine.id from BigRoutine bigRoutine"
+		+ "  where bigRoutine.seriesId = :seriesId)")
+	Integer findMaximumSortOrderBySeriesId(@Param("seriesId") UUID seriesId);
+
+	/**
+	 * 빅루틴 하나 안에서 지금까지 쓴 가장 큰 순서 값을 구한다.
+	 *
+	 * 시리즈 값이 없는 빅루틴을 위한 갈래다. 지금은 생성 경로가 항상 시리즈
+	 * 값을 채우지만, 컬럼이 null 을 허용하고 있어(ERD 1장) 대비해 둔다.
+	 */
+	@Query("select max(smallRoutine.sortOrder) from SmallRoutine smallRoutine"
+		+ " where smallRoutine.bigRoutineId = :bigRoutineId")
+	Integer findMaximumSortOrderByBigRoutineId(@Param("bigRoutineId") Long bigRoutineId);
 
 	/**
 	 * 한 자녀의 살아 있는 할 일을 모두 지운다. 회원 탈퇴와 함께 쓴다.

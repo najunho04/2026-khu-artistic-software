@@ -162,6 +162,23 @@ public class RoutineService {
 	}
 
 	/**
+	 * 할 일을 새로 더할 때 쓸 순서 값을 정한다. 지금까지 쓴 가장 큰 값 + 1 이다.
+	 *
+	 * "살아 있는 할 일 개수 + 1" 을 쓰면 안 된다. 할 일을 지운 뒤 새로 더하면
+	 * 지운 자리의 번호가 다시 나오고, 스몰루틴의 시리즈 값이 순서에서 나오므로
+	 * 그 자리에 있던 미션과 같은 식별자가 만들어진다. 그러면 미션별 통계에서
+	 * 서로 다른 두 할 일이 한 줄로 합쳐져, 보호자 눈에는 할 일 하나가 사라지고
+	 * 다른 할 일의 숫자가 부풀어 보인다.
+	 */
+	private int nextSmallRoutineOrder(BigRoutine bigRoutine) {
+		Integer maximumOrder = (bigRoutine.getSeriesId() == null)
+			? smallRoutineRepository.findMaximumSortOrderByBigRoutineId(bigRoutine.getId())
+			: smallRoutineRepository.findMaximumSortOrderBySeriesId(bigRoutine.getSeriesId());
+
+		return (maximumOrder == null) ? 1 : maximumOrder + 1;
+	}
+
+	/**
 	 * 빅루틴 시리즈와 순서를 섞어 스몰루틴의 시리즈 값을 만든다.
 	 *
 	 * 같은 입력이면 항상 같은 값이 나오므로, 같은 시리즈의 여러 날짜에서
@@ -469,7 +486,7 @@ public class RoutineService {
 			throw new BusinessException(ErrorCode.INVALID_INPUT);
 		}
 
-		int nextOrder = findSmallRoutines(bigRoutineId).size() + 1;
+		int nextOrder = nextSmallRoutineOrder(bigRoutine);
 		UUID seriesId = deriveSmallRoutineSeriesId(bigRoutine.getSeriesId(), nextOrder);
 
 		// 과거 날짜에는 더하지 않는다. 할 일 개수가 늘면 그 날의 이행률

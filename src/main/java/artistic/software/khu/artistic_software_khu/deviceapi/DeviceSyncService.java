@@ -7,6 +7,7 @@ import artistic.software.khu.artistic_software_khu.device.Device;
 import artistic.software.khu.artistic_software_khu.device.DeviceRepository;
 import artistic.software.khu.artistic_software_khu.routine.RoutineDayResponse;
 import artistic.software.khu.artistic_software_khu.routine.RoutineService;
+import artistic.software.khu.artistic_software_khu.routine.SmallRoutine;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
@@ -102,6 +103,34 @@ public class DeviceSyncService {
 
 		if (request.dates() != null && request.dates().size() > maximumSyncDateCount) {
 			throw new BusinessException(ErrorCode.INVALID_INPUT);
+		}
+
+		validateCompletionStatuses(request.completions());
+	}
+
+	/**
+	 * 완료 기록의 상태 값을 검사한다. "DONE" 과 "PENDING" 만 받는다.
+	 *
+	 * 모르는 값을 조용히 넘기면 안 된다. 완료 반영은 "DONE 이 아니면 전부
+	 * PENDING" 으로 처리하므로, 펌웨어의 오타 하나로 아이가 한 일이 통째로
+	 * 지워진다. 그것도 200 응답과 함께 지워져서 기기 쪽에서는 잘못된 것을
+	 * 알아챌 방법이 없다.
+	 *
+	 * 하나라도 이상하면 요청 전체를 거절한다. 이상한 것만 빼고 나머지를
+	 * 반영하면 기기와 서버의 상태가 조금씩 어긋난 채로 굳는다.
+	 */
+	private void validateCompletionStatuses(List<CompletionRecord> completions) {
+		if (completions == null) {
+			return;
+		}
+
+		for (CompletionRecord completion : completions) {
+			boolean isKnownStatus = SmallRoutine.STATUS_DONE.equals(completion.status())
+				|| SmallRoutine.STATUS_PENDING.equals(completion.status());
+
+			if (!isKnownStatus) {
+				throw new BusinessException(ErrorCode.INVALID_INPUT);
+			}
 		}
 	}
 
