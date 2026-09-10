@@ -108,6 +108,19 @@ public class User {
 		this.name = name;
 	}
 
+	/**
+	 * 탈퇴한다. 지운 표시를 남기고 접속 값을 함께 비운다.
+	 *
+	 * 두 가지를 한 메서드에서 하는 이유는 하나만 해서는 탈퇴가 되지 않기
+	 * 때문이다. deleted_at 만 채우고 access_uuid 를 남기면 인증 필터가
+	 * "deleted_at is null" 로 걸러 주기는 하지만, 만료가 없는 값이 계정에
+	 * 그대로 붙어 있게 된다. 반대로 접속 값만 비우면 로그아웃과 다를 바 없다.
+	 */
+	public void withdraw(Instant deletedAt) {
+		this.deletedAt = deletedAt;
+		this.accessUuid = null;
+	}
+
 	public Long getId() {
 		return id;
 	}
