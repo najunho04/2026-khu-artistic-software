@@ -301,6 +301,24 @@ class DeviceSyncIntegrationTest {
 			.andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
 	}
 
+	@Test
+	@DisplayName("기기가 받아 가는 루틴도 시작 시각 순으로 정렬된다")
+	void deviceReceivesRoutinesOrderedByStartTime() throws Exception {
+		// 기기는 받은 차례대로 화면에 띄운다. 앱과 기기가 다른 차례로 보이면
+		// 보호자가 앱에서 본 것과 아이가 기기에서 보는 것이 어긋난다.
+		createRoutineAt("저녁 준비", "19:00", "20:00");
+		createRoutineAt("아침 준비", "07:00", "08:00");
+
+		mockMvc.perform(syncRequest("""
+			{"battery": 70, "firmware": "1.0.3", "completions": [], "dates": ["%s"]}"""
+			.formatted(ROUTINE_DATE)))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.data.routines[0].bigRoutines[0].title").value("아침 준비"))
+			.andExpect(jsonPath("$.data.routines[0].bigRoutines[0].sortOrder").value(1))
+			.andExpect(jsonPath("$.data.routines[0].bigRoutines[1].title").value("저녁 준비"))
+			.andExpect(jsonPath("$.data.routines[0].bigRoutines[1].sortOrder").value(2));
+	}
+
 	// ------------------------------------------------------------------
 	// 알 수 없는 완료 상태
 	// ------------------------------------------------------------------
@@ -431,6 +449,24 @@ class DeviceSyncIntegrationTest {
 			.andReturn().getResponse().getContentAsString();
 
 		return objectMapper.readTree(claimBody).path("data").path("deviceAccessUuid").asText();
+	}
+
+	/** 지정한 시각으로 그 날짜의 루틴을 만든다. 정렬 확인에 쓴다. */
+	private void createRoutineAt(String title, String startTime, String endTime) throws Exception {
+		mockMvc.perform(post("/api/v1/children/" + childId + "/big-routines")
+				.header(APP_HEADER, ownerUuid)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{
+					  "title": "%s",
+					  "startTime": "%s",
+					  "endTime": "%s",
+					  "repeatType": "RANGE",
+					  "startDate": "%s",
+					  "endDate": "%s",
+					  "smallRoutines": [{"title": "할일"}]
+					}""".formatted(title, startTime, endTime, ROUTINE_DATE, ROUTINE_DATE)))
+			.andExpect(status().isCreated());
 	}
 
 	private void createRoutine(String title, String... smallRoutineTitles) throws Exception {

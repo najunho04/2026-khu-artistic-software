@@ -145,7 +145,7 @@ public class RoutineService {
 
 		int order = 1;
 
-		for (SmallRoutineRequest request : requests) {
+		for (SmallRoutineRequest request : sortByRequestedOrder(requests)) {
 			// 스몰루틴의 seriesId 는 빅루틴과 별개로 발급한다. "양치하기 미션"
 			// 하나의 이행률을 날짜에 걸쳐 모으려면 그 할 일만의 식별자가 필요하다.
 			//
@@ -159,6 +159,26 @@ public class RoutineService {
 
 			order++;
 		}
+	}
+
+	/**
+	 * 요청에 적힌 순서(order) 대로 할 일을 줄 세운다.
+	 *
+	 * 앱이 보낸 배열 차례를 그대로 쓰면 "order" 필드가 죽은 값이 된다.
+	 * 특히 양식은 저장해둔 값을 그대로 꺼내 쓰는 것이라, 저장할 때 매겨둔
+	 * 순서가 무시되면 사용자가 정한 차례가 뒤집힌 채로 루틴이 만들어진다.
+	 *
+	 * "order" 를 적지 않은 항목은 뒤로 보내고 보낸 배열 차례를 지킨다.
+	 * 값을 매기지 않았다는 것은 "그냥 보낸 대로" 라는 뜻이기 때문이다.
+	 * 실제로 저장하는 값은 여기서 정한 차례에 따라 1, 2, 3 을 다시 매긴다.
+	 * 요청의 숫자를 그대로 쓰면 1, 5, 9 처럼 구멍 뚫린 값이 저장되고,
+	 * 그 값이 미션 식별자 계산에 쓰이므로 나중에 겹칠 여지가 생긴다.
+	 */
+	private List<SmallRoutineRequest> sortByRequestedOrder(List<SmallRoutineRequest> requests) {
+		return requests.stream()
+			.sorted(Comparator.comparing(
+				SmallRoutineRequest::order, Comparator.nullsLast(Comparator.naturalOrder())))
+			.toList();
 	}
 
 	/**
@@ -279,15 +299,8 @@ public class RoutineService {
 		Map<Long, List<SmallRoutine>> smallRoutinesByBigRoutineId =
 			loadSmallRoutines(bigRoutines);
 
-		// 날짜별로 묶는다. 순서를 지키려고 LinkedHashMap 을 쓴다.
-		Map<LocalDate, List<BigRoutineResponse>> byDate = new LinkedHashMap<>();
-
-		for (BigRoutine bigRoutine : bigRoutines) {
-			byDate.computeIfAbsent(bigRoutine.getRoutineDate(), date -> new ArrayList<>())
-				.add(BigRoutineResponse.of(
-					bigRoutine,
-					smallRoutinesByBigRoutineId.getOrDefault(bigRoutine.getId(), List.of())));
-		}
+		Map<LocalDate, List<BigRoutineResponse>> byDate =
+			groupByDate(bigRoutines, smallRoutinesByBigRoutineId);
 
 		return byDate.entrySet().stream()
 			.map(entry -> CalendarDayResponse.of(entry.getKey(), entry.getValue()))
@@ -316,14 +329,8 @@ public class RoutineService {
 
 		Map<Long, List<SmallRoutine>> smallRoutinesByBigRoutineId = loadSmallRoutines(bigRoutines);
 
-		Map<LocalDate, List<BigRoutineResponse>> byDate = new LinkedHashMap<>();
-
-		for (BigRoutine bigRoutine : bigRoutines) {
-			byDate.computeIfAbsent(bigRoutine.getRoutineDate(), date -> new ArrayList<>())
-				.add(BigRoutineResponse.of(
-					bigRoutine,
-					smallRoutinesByBigRoutineId.getOrDefault(bigRoutine.getId(), List.of())));
-		}
+		Map<LocalDate, List<BigRoutineResponse>> byDate =
+			groupByDate(bigRoutines, smallRoutinesByBigRoutineId);
 
 		return byDate.entrySet().stream()
 			.map(entry -> new RoutineDayResponse(entry.getKey(), entry.getValue()))
@@ -415,6 +422,80 @@ public class RoutineService {
 	}
 
 	/**
+	 * 빅루틴을 날짜별로 묶고, 하루 안에서 시작 시각이 이른 것부터 순서를 매긴다.
+	 *
+	 * 순서를 DB 에 저장하지 않고 여기서 계산하는 이유는, 저장해 두면 나중에
+	 * 시각을 고쳤을 때 순서가 시각과 어긋나기 때문이다. 그것을 맞추려면 같은
+	 * 날짜의 다른 행까지 함께 고쳐야 하는데, 조회할 때 세는 편이 훨씬 싸다.
+	 * 하루에 빅루틴은 많아야 몇 개다.
+	 *
+	 * 시작 시각이 비어 있는 루틴은 뒤로 보낸다. 시각이 같으면 먼저 만든 것이
+	 * 앞이다. 어느 쪽이든 같은 입력에 항상 같은 차례가 나와야 앱과 기기가
+	 * 같은 화면을 보여준다.
+	 */
+	private Map<LocalDate, List<BigRoutineResponse>> groupByDate(
+		List<BigRoutine> bigRoutines,
+		Map<Long, List<SmallRoutine>> smallRoutinesByBigRoutineId) {
+
+		Map<LocalDate, List<BigRoutine>> entitiesByDate = new LinkedHashMap<>();
+
+		for (BigRoutine bigRoutine : bigRoutines) {
+			entitiesByDate
+				.computeIfAbsent(bigRoutine.getRoutineDate(), date -> new ArrayList<>())
+				.add(bigRoutine);
+		}
+
+		Map<LocalDate, List<BigRoutineResponse>> byDate = new LinkedHashMap<>();
+
+		for (Map.Entry<LocalDate, List<BigRoutine>> entry : entitiesByDate.entrySet()) {
+			List<BigRoutine> ordered = sortByStartTime(entry.getValue());
+			List<BigRoutineResponse> responses = new ArrayList<>();
+
+			for (int index = 0; index < ordered.size(); index++) {
+				BigRoutine bigRoutine = ordered.get(index);
+
+				responses.add(BigRoutineResponse.of(
+					bigRoutine,
+					smallRoutinesByBigRoutineId.getOrDefault(bigRoutine.getId(), List.of()),
+					index + 1));
+			}
+
+			byDate.put(entry.getKey(), responses);
+		}
+
+		return byDate;
+	}
+
+	/**
+	 * 빅루틴 하나가 그 날짜에서 몇 번째인지 센다. 단건 응답에서 쓴다.
+	 *
+	 * 목록 응답과 같은 규칙을 써야 한다. 수정 응답에 적힌 순서와 곧이어
+	 * 캘린더를 다시 불렀을 때의 순서가 다르면 앱이 어느 쪽을 믿어야 할지 모른다.
+	 */
+	private Integer positionInDay(BigRoutine bigRoutine) {
+		List<BigRoutine> sameDay = sortByStartTime(bigRoutineRepository
+			.findAllByChildIdAndRoutineDateBetweenAndDeletedAtIsNullOrderByRoutineDateAscIdAsc(
+				bigRoutine.getChildId(), bigRoutine.getRoutineDate(), bigRoutine.getRoutineDate()));
+
+		for (int index = 0; index < sameDay.size(); index++) {
+			if (sameDay.get(index).getId().equals(bigRoutine.getId())) {
+				return index + 1;
+			}
+		}
+
+		return null;
+	}
+
+	/** 시작 시각 오름차순. 비어 있으면 뒤로, 같으면 먼저 만든 것이 앞이다. */
+	private List<BigRoutine> sortByStartTime(List<BigRoutine> bigRoutines) {
+		return bigRoutines.stream()
+			.sorted(Comparator
+				.comparing(BigRoutine::getStartTime, Comparator.nullsLast(Comparator.naturalOrder()))
+				.thenComparing(BigRoutine::getId))
+			.toList();
+	}
+
+	/**
 	 * 여러 빅루틴의 할 일을 한 번에 읽어 빅루틴 id 로 묶는다.
 	 *
 	 * 빅루틴마다 따로 물어보면 한 달치 조회에 수십 번의 질의가 나간다.
@@ -454,7 +535,8 @@ public class RoutineService {
 		// 고치는 중이므로, 그것까지 막으면 오타 하나를 영영 못 고친다.
 		bigRoutine.update(request.title(), request.startTime(), request.endTime());
 
-		return BigRoutineResponse.of(bigRoutine, findSmallRoutines(bigRoutineId));
+		return BigRoutineResponse.of(
+			bigRoutine, findSmallRoutines(bigRoutineId), positionInDay(bigRoutine));
 	}
 
 	@Transactional
