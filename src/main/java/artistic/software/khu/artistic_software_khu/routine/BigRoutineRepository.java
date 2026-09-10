@@ -1,11 +1,15 @@
 package artistic.software.khu.artistic_software_khu.routine;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 /**
  * 빅루틴 조회. 모든 조회에 "deletedAt is null" 조건이 붙는다.
@@ -39,5 +43,18 @@ public interface BigRoutineRepository extends JpaRepository<BigRoutine, Long> {
 
 	List<BigRoutine> findAllBySeriesIdAndRoutineDateGreaterThanEqualAndDeletedAtIsNull(
 		UUID seriesId, LocalDate fromDate);
+
+	/**
+	 * 한 자녀의 살아 있는 빅루틴을 모두 지운다. 회원 탈퇴와 함께 쓴다.
+	 *
+	 * 날짜 조건을 걸지 않는다. 수정과 삭제는 "오늘 이후" 만 건드리지만
+	 * ("API.md" 9장) 탈퇴는 계정을 통째로 없애는 것이라 지난 날짜의 루틴도
+	 * 남길 이유가 없다.
+	 */
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query("update BigRoutine bigRoutine set bigRoutine.deletedAt = :deletedAt"
+		+ " where bigRoutine.childId = :childId and bigRoutine.deletedAt is null")
+	int softDeleteAllByChildId(
+		@Param("childId") Long childId, @Param("deletedAt") Instant deletedAt);
 
 }

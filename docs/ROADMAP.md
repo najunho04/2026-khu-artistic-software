@@ -21,7 +21,7 @@
 | 기술 스택 | Spring Boot 4.1.1 / Java 21 / Gradle 9.7.1 / PostgreSQL 17 |
 | 칸반보드 9개 프로젝트 | Phase 1 ~ 5 구현 완료. 남은 미구현 엔드포인트는 **3개** — `DELETE /users/me` · `GET /characters` · `GET /children/:childId/characters` (커뮤니티 11개는 구현 제외) |
 | 테스트 환경 | **확정 완료 (T-1 ~ T-5).** JUnit 5 + Testcontainers(실제 PostgreSQL·Redis 컨테이너) 구성이 코드에 올라가 동작 확인됨. 0-A 참고 |
-| 테스트 코드 | **33개** (기반 3 + 공통 응답 계층 13 + 보안 설정 11 + 스키마 6). 전부 통과·skip 0. **도메인 테스트는 아직 없음.** 아래 TDD 규칙에 따라 각 작업의 첫 산출물이 테스트가 됩니다 |
+| 테스트 코드 | **251개.** 전부 통과 · skip 0 (`./gradlew test --rerun-tasks` 로 확인, 2026-09-10). 각 작업의 첫 산출물이 테스트입니다 |
 | CI | **작성 완료 (`.github/workflows/ci.yml`).** push·PR 시 `./gradlew test` 실행. 아직 원격에 push 하지 않아 **실제 러너에서의 동작은 미검증** |
 | CD (배포) | **미착수·정보 없음.** 배포 대상·환경변수·시크릿이 세 문서 어디에도 없어 작성하지 않았습니다 |
 | 커버리지 게이트 | **미확정.** T-4 의 "커버리지 기준" 부분은 아직 정해지지 않았습니다 |
@@ -751,9 +751,13 @@ DB 는 Testcontainers 의 실제 PostgreSQL 17 을 씁니다.
 
 ## Phase 6 — 부가 기능
 
-### 6-1. 유저 API (칸반: **낮음**) — 🟡 조회 · 수정 완료 (2026-09-09), 탈퇴는 착수 가능 (2026-09-10)
+### 6-1. 유저 API (칸반: **낮음**) — ✅ 완료 (조회 · 수정 2026-09-09, 탈퇴 2026-09-10)
 
-**산출물** — `user/`(UserService · UserController · DTO 2개). 테스트 **5개**. `GET /users/me` · `PATCH /users/me` 두 개이며, `DELETE /users/me` 는 cascade 정책(0-3) 대기입니다.
+**산출물** — `user/`(UserService · UserController · DTO 2개). 테스트는 `UserApiIntegrationTest` **5개** + `UserWithdrawalIntegrationTest` **7개**. `GET /users/me` · `PATCH /users/me` · `DELETE /users/me` 세 개가 모두 있습니다.
+
+> **탈퇴가 다섯 종류를 건드리므로 `UserService` 가 여러 도메인의 저장소를 함께 듭니다.** 자녀 · 기기 · 빅루틴 · 스몰루틴 · 양식입니다. 저장소마다 `softDeleteAllBy...` 를 한 개씩 더했고, 기기는 자녀 삭제가 이미 쓰던 `releaseAllByChildId` 를 그대로 재사용합니다. 따로 만들면 "자녀 삭제 때는 되는데 탈퇴 때는 안 되는" 차이가 생깁니다.
+
+> ⚠️ **벌크 UPDATE 뒤에 엔티티를 다시 읽어야 했습니다.** `@Modifying(clearAutomatically = true)` 가 영속성 컨텍스트(하이버네이트가 들고 있는 객체 보관함)를 비우기 때문에, 자녀·루틴을 지우기 전에 계정 객체를 먼저 바꿔 두면 그 변경이 DB 로 내려가기 전에 사라집니다. 그래서 계정은 **맨 마지막에** 다시 읽어 지웁니다.
 
 > **응답에서 `provider` 를 뺐습니다.** 소셜 로그인을 없애면서 값이 항상 비게 되었습니다. `password_hash` 와 `access_uuid` 도 당연히 담지 않습니다. `access_uuid` 는 만료가 없어 한 번 새어 나가면 회수할 방법이 로그아웃뿐입니다.
 
