@@ -664,6 +664,9 @@
 | battery | number | Y | 0~100 |
 | firmware | string | Y | 펌웨어 버전. 변경 시 서버가 갱신 |
 | completions | array | Y | 완료 기록. 없으면 빈 배열 |
+| completions[].smallRoutineId | number | Y | 할 일 id |
+| completions[].status | enum | Y | `DONE` \| `PENDING` **두 개만.** 그 밖의 값은 400 `INVALID_INPUT` |
+| completions[].completedAt | datetime | N | `DONE` 일 때의 완료 시각. `PENDING` 이면 비웁니다 |
 | dates | array | Y | 받아올 루틴 날짜 목록 (yyyy-MM-dd) |
 
 ```json
@@ -713,10 +716,11 @@
 - 응답 `serverTime`으로 기기 RTC를 보정합니다.
 - **이 엔드포인트는 루틴을 만들지 않습니다.** 있는 것만 읽어 갑니다. 기기에서는 루틴 생성이 불가능하고, 빅루틴은 앱이 요청할 때 즉시 만들어지기 때문입니다(9장).
 - UPDATE 기반이라 **멱등성이 보장**됩니다. 네트워크 실패로 기기가 같은 `completions`를 재전송해도 안전합니다.
+- ✅ **모르는 `status` 는 요청 전체를 거절합니다 (2026-09-10 확정).** 완료 반영이 "`DONE` 이 아니면 전부 `PENDING`" 이라, 펌웨어의 오타 하나가 200 응답과 함께 아이가 한 일을 통째로 지웁니다. 기기 쪽에서는 잘못됐다는 사실조차 알 수 없습니다. 이상한 것만 빼고 나머지를 반영하지 않는 이유는, 그렇게 하면 기기와 서버의 상태가 조금씩 어긋난 채로 굳기 때문입니다.
 - 🔺 `accepted` 카운트와 부분 실패 처리 방식은 추론. 일부 `smallRoutineId`가 이미 삭제된 경우 전체를 실패시킬지 무시할지 정해야 합니다. **무시하고 넘어가는 쪽을 권장** — 기기는 재시도 외에 할 수 있는 일이 없습니다.
 - 🔺 `dates` 배열 최대 길이 제한 필요. 3일을 제안합니다.
 
-**Error**: `DEVICE_UNAUTHORIZED` 401 (`X-Device-Uuid` 가 없거나 유효하지 않음. 자체 복구 경로가 없으므로 기기는 재페어링을 안내해야 합니다)
+**Error**: `DEVICE_UNAUTHORIZED` 401 (`X-Device-Uuid` 가 없거나 유효하지 않음. 자체 복구 경로가 없으므로 기기는 재페어링을 안내해야 합니다) · `INVALID_INPUT` 400 (`battery` 가 0~100 밖, `dates` 가 상한 초과, `status` 가 `DONE`/`PENDING` 이 아님)
 
 ---
 
