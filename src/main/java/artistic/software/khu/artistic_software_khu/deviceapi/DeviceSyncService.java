@@ -1,5 +1,6 @@
 package artistic.software.khu.artistic_software_khu.deviceapi;
 
+import artistic.software.khu.artistic_software_khu.character.CharacterService;
 import artistic.software.khu.artistic_software_khu.common.BusinessException;
 import artistic.software.khu.artistic_software_khu.common.ErrorCode;
 import artistic.software.khu.artistic_software_khu.device.Device;
@@ -37,6 +38,8 @@ public class DeviceSyncService {
 
 	private final RoutineService routineService;
 
+	private final CharacterService characterService;
+
 	private final Clock clock;
 
 	// 한 번에 받아 갈 수 있는 날짜 수. "API.md" 15장 #8 이 아직 미확정이라
@@ -50,11 +53,13 @@ public class DeviceSyncService {
 	public DeviceSyncService(
 		DeviceRepository deviceRepository,
 		RoutineService routineService,
+		CharacterService characterService,
 		Clock clock,
 		@Value("${yeso.device.max-sync-date-count:3}") int maximumSyncDateCount) {
 
 		this.deviceRepository = deviceRepository;
 		this.routineService = routineService;
+		this.characterService = characterService;
 		this.clock = clock;
 		this.maximumSyncDateCount = maximumSyncDateCount;
 	}
@@ -69,17 +74,23 @@ public class DeviceSyncService {
 		Instant now = clock.instant();
 
 		// push — 완료 기록과 기기 상태를 반영한다.
-		int accepted = routineService.applyCompletions(
+		RoutineService.CompletionResult completionResult = routineService.applyCompletions(
 			device.getChildId(), toApplications(request.completions()));
 
 		device.recordSync(request.battery(), request.firmware(), now);
+
+		// 캐릭터는 "이번에 처음 완료된" 개수만큼 자란다("API.md" 12-1).
+		// 반영한 기록 수(accepted) 를 쓰면 기기가 같은 요청을 재전송할 때마다
+		// 캐릭터가 자라서, 아이의 성장이 네트워크 상태에 좌우된다.
+		characterService.grantExperience(
+			device.getChildId(), completionResult.newlyCompleted());
 
 		// pull — 요청한 날짜의 루틴을 읽는다. push 뒤에 두어야 방금 올린
 		// 완료가 이 응답에 담긴다.
 		List<RoutineDayResponse> routines =
 			routineService.findRoutinesOn(device.getChildId(), request.dates());
 
-		return new SyncResponse(now, accepted, routines);
+		return new SyncResponse(now, completionResult.accepted(), routines);
 	}
 
 	private void validate(SyncRequest request) {

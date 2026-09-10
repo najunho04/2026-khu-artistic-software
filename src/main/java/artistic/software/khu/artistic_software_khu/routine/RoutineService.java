@@ -327,12 +327,19 @@ public class RoutineService {
 	 * @return 실제로 반영된 개수
 	 */
 	@Transactional
-	public int applyCompletions(Long childId, List<CompletionApplication> completions) {
+	public CompletionResult applyCompletions(
+		Long childId, List<CompletionApplication> completions) {
+
 		if (completions == null || completions.isEmpty()) {
-			return 0;
+			return new CompletionResult(0, 0);
 		}
 
 		int accepted = 0;
+
+		// "이미 DONE 이던 할 일" 과 "이번에 DONE 이 된 할 일" 을 나눠 센다.
+		// 캐릭터 경험치가 뒤의 숫자로 계산되기 때문이다. 앞의 숫자를 쓰면
+		// 기기가 같은 기록을 재전송할 때마다 캐릭터가 자란다.
+		int newlyCompleted = 0;
 
 		for (CompletionApplication completion : completions) {
 			if (completion.smallRoutineId() == null) {
@@ -357,11 +364,27 @@ public class RoutineService {
 				continue;
 			}
 
+			boolean wasDone = SmallRoutine.STATUS_DONE.equals(smallRoutine.getStatus());
+			boolean becomesDone = SmallRoutine.STATUS_DONE.equals(completion.status());
+
 			smallRoutine.applyCompletion(completion.status(), completion.completedAt());
 			accepted++;
+
+			if (becomesDone && !wasDone) {
+				newlyCompleted++;
+			}
 		}
 
-		return accepted;
+		return new CompletionResult(accepted, newlyCompleted);
+	}
+
+	/**
+	 * 완료 반영의 결과.
+	 *
+	 * @param accepted       실제로 반영한 기록 수. 기기 응답의 accepted 다
+	 * @param newlyCompleted 이번에 처음 DONE 이 된 할 일 수. 캐릭터 경험치의 근거다
+	 */
+	public record CompletionResult(int accepted, int newlyCompleted) {
 	}
 
 	/**
