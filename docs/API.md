@@ -4,7 +4,11 @@
 > 총 **46개** 엔드포인트 · 앱용 `/api/v1/**` 44개, 기기용 `/device-api/v1/**` 2개
 > 커뮤니티 11개는 구현 제외이므로 **실제 구현 대상은 35개**입니다.
 >
-> 최종 수정: 2026-09-10 — **병합 전 점검 반영.** 스펙은 그대로이고, 문서가 이미 정해 둔 것을 구현이 지키지 않던 자리를 채웠습니다. 형식이 깨진 요청의 상태 코드(2-3), 로그인·기기 수정·양식 저장·기기 동기화의 필수 항목 누락(4 · 7 · 8 · 10장), 빅루틴 수정의 시각 검사(9장), 같은 자원에 동시에 들어온 요청의 처리(8 · 12장)입니다. **엔드포인트 개수와 필드는 바뀌지 않았습니다.**
+> 최종 수정: 2026-10-03 — **Notion 개발 문서 최신화 (코드 대조).** 컨트롤러 · 요청/응답 클래스와 대조해 엔드포인트 35개가 일치함을 확인하고, 문서가 코드와 어긋나 있던 자리를 정리했습니다. **스펙(엔드포인트 개수 · 필드)은 바뀌지 않았습니다.** ① `GET /children/:childId/characters` 예시의 `exp: 120` 은 상한(30)을 넘는 값이라 30 으로 고쳤습니다. ② `POST /device-api/v1/sync` · `GET /children/:childId/dashboard` 예시에 실제 응답에 있는 필드(`seriesId` · `completedAt` · `firmwareVersion` · `pairedAt`)를 채웠습니다. ③ **문서와 코드가 다른 두 곳을 본문에 표시**했습니다 — `GET /children` 의 `deviceCount` (문서에만 있고 구현 안 됨), `POST /big-routines/:id/small-routines` 의 `order` (받지만 서버가 쓰지 않음). 둘 다 어느 쪽을 따를지 **결정이 필요**합니다(15장). ④ `scope` 에 모르는 값을 보내면 400 이 아니라 기본 처리됨을 적었습니다.
+>
+> **문서 동기화**: `ERD.md`(`DEVICES.device_uid` NULL 허용 V3 보충), `ROADMAP.md`(개수 표기) 모두 **영향 있음**이며 같은 날짜로 갱신했습니다.
+>
+> (직전 수정: 2026-09-10 — **병합 전 점검 반영.** 스펙은 그대로이고, 문서가 이미 정해 둔 것을 구현이 지키지 않던 자리를 채웠습니다. 형식이 깨진 요청의 상태 코드(2-3), 로그인·기기 수정·양식 저장·기기 동기화의 필수 항목 누락(4 · 7 · 8 · 10장), 빅루틴 수정의 시각 검사(9장), 같은 자원에 동시에 들어온 요청의 처리(8 · 12장)입니다. **엔드포인트 개수와 필드는 바뀌지 않았습니다.**)
 >
 > (같은 날 앞선 수정: **미확정 2건 확정.** `DELETE /users/me` 의 cascade 정책(4장)과 캐릭터 획득·진화 규칙(12장)을 채웠습니다. 엔드포인트 개수는 그대로이며, 그동안 구현을 막고 있던 명세 공백이 사라져 **캐릭터 2개와 탈퇴 1개가 착수 가능해졌습니다.**)
 >
@@ -449,7 +453,8 @@
 }
 ```
 
-- 🔺 `deviceCount`는 추론 항목. N기기 전환으로 목록 화면에서 기기 연결 여부를 보여줄 필요가 생겼는데 명세에는 없습니다.
+- 🔺 `deviceCount`는 추론 항목입니다. N기기 전환으로 목록 화면에서 기기 연결 여부를 보여줄 필요가 생겼는데 명세에는 없습니다.
+- ⚠️ **현재 서버 응답에는 `deviceCount` 가 없습니다** (2026-10-03 코드 대조). 위 예시는 구현보다 앞서 있습니다. 넣을지 문서에서 뺄지 결정이 필요합니다(15장 #10).
 
 ### GET /children/:childId — 자녀 상세 조회
 
@@ -710,13 +715,14 @@
         "bigRoutines": [
           {
             "bigRoutineId": 300,
+            "seriesId": "9f1c2e40-...",
             "title": "아침 준비",
             "startTime": "07:30",
             "endTime": "08:30",
             "sortOrder": 1,
             "smallRoutines": [
-              { "smallRoutineId": 901, "title": "세수하기", "sortOrder": 1, "status": "DONE" },
-              { "smallRoutineId": 903, "title": "양치하기", "sortOrder": 2, "status": "PENDING" }
+              { "smallRoutineId": 901, "seriesId": "3a7b...", "title": "세수하기", "sortOrder": 1, "status": "DONE", "completedAt": "2026-09-01T07:42:00Z" },
+              { "smallRoutineId": 903, "seriesId": "3a8c...", "title": "양치하기", "sortOrder": 2, "status": "PENDING", "completedAt": null }
             ]
           }
         ]
@@ -887,7 +893,7 @@
 
 **Request**: `title`, `startTime`, `endTime` (모두 선택, 최소 1개)
 
-**Query**: `scope` — `series`(같은 series 전체, **기본값**) \| `single`(해당 날짜만)
+**Query**: `scope` — `series`(같은 series 전체, **기본값**) \| `single`(해당 날짜만). 모르는 값은 400 이 아니라 `single` 로 처리됩니다.
 
 **Response 200**: 빅루틴 단건
 
@@ -901,7 +907,7 @@
 
 ### DELETE /big-routines/:bigRoutineId — 빅루틴 삭제
 
-**Query**: `scope` — `single` (해당 날짜만, **기본값**) \| `series` (같은 series 전체)
+**Query**: `scope` — `single` (해당 날짜만, **기본값**) \| `series` (같은 series 전체). 모르는 값은 400 이 아니라 `single` 로 처리됩니다.
 
 **Response 204**
 
@@ -913,7 +919,9 @@
 
 **Request**: `title` (string, Y), `order` (number, N)
 
-**Query**: `scope` — `series`(같은 series 전체, **기본값**) \| `single`(해당 날짜만)
+> ⚠️ **`order` 는 현재 서버가 쓰지 않습니다** (2026-10-03 코드 대조). 새 할 일은 항상 맨 뒤(시리즈 전체에서 지운 행까지 포함한 가장 큰 `sortOrder` + 1)에 붙습니다. 순서를 바꾸려면 아래 `PUT .../small-routines/order` 를 씁니다. 문서가 받는다고 적은 값을 구현이 무시하는 상태라 결정이 필요합니다(15장 #11).
+
+**Query**: `scope` — `series`(같은 series 전체, **기본값**) \| `single`(해당 날짜만). 모르는 값은 400 이 아니라 `single` 로 처리됩니다.
 
 **Response 201**
 
@@ -1154,7 +1162,9 @@ completionRate = n / N * 100  (소수 첫째 자리까지)
         "nickname": "아이 시계",
         "status": "ACTIVE",
         "battery": 78,
-        "lastSyncedAt": "2026-09-01T07:55:00Z"
+        "firmwareVersion": "1.0.3",
+        "lastSyncedAt": "2026-09-01T07:55:00Z",
+        "pairedAt": "2026-08-20T10:12:00Z"
       }
     ]
   },
@@ -1243,7 +1253,7 @@ completionRate = n / N * 100  (소수 첫째 자리까지)
       "code": "PENGUIN_01",
       "name": "펭구",
       "level": 3,
-      "exp": 120,
+      "exp": 30,
       "acquiredAt": "2026-08-20T10:12:00Z"
     }
   ],
@@ -1451,6 +1461,8 @@ completionRate = n / N * 100  (소수 첫째 자리까지)
 | 6 | 만료 PENDING 행 **정리 배치 주기** | 페어링 정리 | Phase 2 |
 | 7 | 조회 기간 상한 — calendar `from`~`to`(31일 제안), `RANGE` 반복 기간 길이 | 루틴 | Phase 3 |
 | 8 | sync 부분 실패 처리, `dates` 최대 길이 | 디바이스 sync | Phase 4 |
+| 10 | `GET /children` 의 `deviceCount` — 문서에는 있고 서버 응답에는 없음. 넣을지 문서에서 뺄지 | 자녀 | 앱 개발 착수 전 |
+| 11 | 스몰루틴 추가의 `order` — 문서는 받는다고 적었고 서버는 무시함. 서버가 존중할지 문서에서 뺄지 | 루틴 | 앱 개발 착수 전 |
 
 ### 종료된 항목
 
