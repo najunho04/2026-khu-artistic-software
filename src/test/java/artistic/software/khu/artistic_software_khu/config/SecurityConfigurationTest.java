@@ -1,10 +1,13 @@
 package artistic.software.khu.artistic_software_khu.config;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import static org.hamcrest.Matchers.containsStringIgnoringCase;
 import static org.hamcrest.Matchers.not;
 
 import org.junit.jupiter.api.DisplayName;
@@ -152,6 +155,68 @@ class SecurityConfigurationTest {
 		mockMvc.perform(post("/device-api/v1/sync")
 				.header("X-Access-Uuid", "3f2b8c10-5d4e-4a91-b7c3-9e0f1a2b3c4d"))
 			.andExpect(status().isUnauthorized());
+	}
+
+	// 2026-10-31 확정 ("API.md" 1-1-2). 브라우저에서 도는 가상 기기 페이지가
+	// 서버를 직접 부르므로, 그 페이지의 출처 하나만 CORS 로 허용한다.
+	//
+	// CORS 는 브라우저가 "다른 주소의 페이지가 이 서버를 불러도 되는가" 를 서버에
+	// 묻는 규칙이다. 커스텀 헤더(X-Device-Uuid 등)를 실은 요청은 본 요청 전에
+	// OPTIONS 로 "미리 묻는 요청(preflight)" 을 먼저 보내고, 서버가 허락하는
+	// 응답을 줘야 본 요청이 나간다.
+	private static final String ALLOWED_ORIGIN = "https://philipn337-namphil.github.io";
+
+	@Test
+	@DisplayName("허용한 출처의 기기 API preflight 는 통과하고 기기 헤더를 허락한다")
+	void devicePreflightFromAllowedOriginIsAccepted() throws Exception {
+		// 미리 묻는 요청은 인증 헤더를 싣지 않는다. 브라우저 규칙이 그렇다.
+		// 그래서 이 요청이 인증 필터에 막혀 401 이 되면 본 요청은 영영 나가지 못한다.
+		mockMvc.perform(options("/device-api/v1/sync")
+				.header("Origin", ALLOWED_ORIGIN)
+				.header("Access-Control-Request-Method", "POST")
+				.header("Access-Control-Request-Headers", "X-Device-Uuid, Content-Type"))
+			.andExpect(status().isOk())
+			.andExpect(header().string("Access-Control-Allow-Origin", ALLOWED_ORIGIN))
+			.andExpect(header().string("Access-Control-Allow-Headers", containsStringIgnoringCase("X-Device-Uuid")));
+	}
+
+	@Test
+	@DisplayName("허용한 출처의 앱 API preflight 도 통과하고 앱 헤더를 허락한다")
+	void appPreflightFromAllowedOriginIsAccepted() throws Exception {
+		// 두 체인이 따로 있으므로 한쪽에만 CORS 를 달고 다른 쪽을 잊는 실수가
+		// 생기기 쉽다. 그래서 체인마다 하나씩 확인한다.
+		mockMvc.perform(options("/api/v1/users/me")
+				.header("Origin", ALLOWED_ORIGIN)
+				.header("Access-Control-Request-Method", "GET")
+				.header("Access-Control-Request-Headers", "X-Access-Uuid"))
+			.andExpect(status().isOk())
+			.andExpect(header().string("Access-Control-Allow-Origin", ALLOWED_ORIGIN))
+			.andExpect(header().string("Access-Control-Allow-Headers", containsStringIgnoringCase("X-Access-Uuid")));
+	}
+
+	@Test
+	@DisplayName("허용하지 않은 출처의 preflight 는 403 이고 허락 헤더가 없다")
+	void preflightFromOtherOriginIsRejected() throws Exception {
+		// 모든 출처를 허용하면 아무 웹페이지나 보호자의 브라우저를 빌려 서버를
+		// 부를 수 있다. 허용 목록 밖의 출처는 거절되어야 한다.
+		mockMvc.perform(options("/device-api/v1/sync")
+				.header("Origin", "https://evil.example.com")
+				.header("Access-Control-Request-Method", "POST"))
+			.andExpect(status().isForbidden())
+			.andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
+	}
+
+	@Test
+	@DisplayName("허용한 출처의 본 요청은 인증에 실패해도 허락 헤더가 붙어 페이지가 에러를 읽을 수 있다")
+	void actualRequestFromAllowedOriginCarriesAllowOriginEvenWhenUnauthorized() throws Exception {
+		// 허락 헤더가 없으면 브라우저가 응답 본문을 페이지에 넘기지 않는다.
+		// 그러면 페이지는 DEVICE_UNAUTHORIZED 를 보지 못하고 "네트워크 오류" 로만 알게
+		// 되어 재페어링 안내를 할 수 없다.
+		mockMvc.perform(post("/device-api/v1/sync")
+				.header("Origin", ALLOWED_ORIGIN))
+			.andExpect(status().isUnauthorized())
+			.andExpect(header().string("Access-Control-Allow-Origin", ALLOWED_ORIGIN))
+			.andExpect(jsonPath("$.error.code").value("DEVICE_UNAUTHORIZED"));
 	}
 
 }
