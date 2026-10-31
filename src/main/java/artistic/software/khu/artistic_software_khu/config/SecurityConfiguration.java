@@ -1,8 +1,12 @@
 package artistic.software.khu.artistic_software_khu.config;
 
+import java.util.List;
+
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import artistic.software.khu.artistic_software_khu.common.ErrorCode;
@@ -11,6 +15,9 @@ import artistic.software.khu.artistic_software_khu.user.UserRepository;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -68,6 +75,42 @@ public class SecurityConfiguration {
 	}
 
 	/**
+	 * 브라우저 호출 허용 규칙 (CORS). "API.md" 1-1-2, 2026-10-31 확정.
+	 *
+	 * CORS 는 브라우저가 "다른 주소에서 온 페이지가 이 서버를 불러도 되는가" 를
+	 * 서버에 묻고, 서버가 허락한 경우에만 응답을 페이지에 넘기는 규칙이다.
+	 * 앱과 실제 기기는 브라우저가 아니라서 이 규칙과 상관이 없다. 지금 이것이 필요한
+	 * 것은 GitHub Pages 에서 도는 가상 기기 페이지 하나뿐이다.
+	 *
+	 * 두 체인이 같은 규칙을 나눠 쓴다. 허용 출처를 체인마다 따로 두면 한쪽만
+	 * 고치는 실수가 생기기 때문이다.
+	 *
+	 * 허용 출처를 "*" 로 열지 않는다. 그러면 아무 웹페이지나 방문자의 브라우저를
+	 * 빌려 서버를 부를 수 있다. 목록은 설정값 "yeso.cors.allowed-origins" 로 두어
+	 * 출처가 늘어도 코드를 고치지 않게 했다.
+	 *
+	 * 쿠키를 쓰지 않으므로 allowCredentials 는 켜지 않는다. 인증 값은 헤더로만 오간다.
+	 */
+	@Bean
+	CorsConfigurationSource corsConfigurationSource(
+		@Value("${yeso.cors.allowed-origins}") List<String> allowedOrigins) {
+
+		CorsConfiguration corsConfiguration = new CorsConfiguration();
+		corsConfiguration.setAllowedOrigins(allowedOrigins);
+		corsConfiguration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE"));
+		// 앱과 기기의 인증 헤더 두 개와 JSON 본문용 Content-Type 만 허락한다.
+		// 여기 없는 헤더를 실은 요청은 브라우저가 보내지 않는다.
+		corsConfiguration.setAllowedHeaders(List.of("Content-Type", "X-Access-Uuid", "X-Device-Uuid"));
+		// 미리 묻는 요청(preflight)의 답을 브라우저가 1시간 기억하게 한다.
+		// 기기 페이지는 동기화를 반복하므로 매번 한 번 더 묻는 왕복을 줄인다.
+		corsConfiguration.setMaxAge(3600L);
+
+		UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+		source.registerCorsConfiguration("/**", corsConfiguration);
+		return source;
+	}
+
+	/**
 	 * 기기용 체인. 경로는 /device-api/v1/** 이다.
 	 *
 	 * 앱용보다 먼저 평가되도록 순서를 앞에 둔다. 두 체인의 담당 경로가 겹치지는
@@ -85,6 +128,10 @@ public class SecurityConfiguration {
 
 		http
 			.securityMatcher("/device-api/v1/**")
+			// CORS 를 인증보다 먼저 처리한다. 미리 묻는 요청(preflight)은 브라우저
+			// 규칙상 인증 헤더를 싣지 않으므로, 인증 뒤에 두면 401 로 막혀 본 요청이
+			// 나가지 못한다. 규칙은 위 corsConfigurationSource 빈을 쓴다.
+			.cors(Customizer.withDefaults())
 			.csrf(csrf -> csrf.disable())
 			.sessionManagement(session ->
 				session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -130,6 +177,8 @@ public class SecurityConfiguration {
 
 		http
 			.securityMatcher("/api/v1/**")
+			// 기기용 체인과 같은 이유로 인증보다 먼저 CORS 를 처리한다.
+			.cors(Customizer.withDefaults())
 			.csrf(csrf -> csrf.disable())
 			.sessionManagement(session ->
 				session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
